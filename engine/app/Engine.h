@@ -264,11 +264,16 @@ public:
     // GPU renderer can exist; a second call just reports whether it is on.
     bool EnableGpu(Window* window, std::string* error);
     // Before EnableGpu: a disk cache for compiled shaders and background compiles of shader graphs
-    // (GpuRenderer::Settings). The editor turns both on; games and tests compile on first use.
+    // (GpuRenderer::Settings). The editor turns both on; games compile on first use.
     void SetGpuShaderOptions(const std::string& cacheDir, bool async) {
         gpuShaderCache_ = cacheDir;
         gpuAsyncShaders_ = async;
     }
+    // Before EnableGpu: false keeps every shader graph on the GPU interpreters (GpuRenderer::Settings::compileGraphs).
+    void SetGpuCompileGraphs(bool on) { gpuCompileGraphs_ = on; }
+    // The cache folder of Engines created afterwards that set none (the test runner shares one, so a
+    // GPU test does not recompile the built-in programs every time).
+    static void SetDefaultGpuShaderCache(const std::string& cacheDir);
     GpuRenderer* Gpu() { return gpu_.get(); }
     // Loads project files before they are needed, so that their first use does not stall a frame
     // (asset.preload, Lua game.preload): effects with everything their emitters draw with, materials,
@@ -416,6 +421,7 @@ private:
     std::vector<std::shared_ptr<const Mesh>> preloadMeshes_;
     std::string gpuShaderCache_;
     bool gpuAsyncShaders_ = false;
+    bool gpuCompileGraphs_ = true;
     CommandRegistry commands_;
     std::unique_ptr<ScriptHost> scripts_;
     std::unique_ptr<PhysicsWorld> physics_;

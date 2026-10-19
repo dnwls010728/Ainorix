@@ -364,8 +364,8 @@ class Graph:
         if name is not None:
             node["name"] = name
         self.nodes.append(node)
-        if len(self.nodes) > 48:
-            raise SystemExit("shader graph over 48 nodes")
+        if len(self.nodes) > 128:
+            raise SystemExit("shader graph over 128 nodes")
         return len(self.nodes) - 1
 
     def c(self, value):

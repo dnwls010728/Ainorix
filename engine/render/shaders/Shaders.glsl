@@ -22,6 +22,25 @@
 // Shader graph arithmetic shared by the vertex (offset) and fragment (surface) evaluators.
 // Instruction numbering and finite semantics match ShaderGraph.cpp.
 @block graph_ops
+// Interpreter instruction `i` from `packed`, element i / 4 of a code array holding four per vec4 (GLES targets
+// cannot index a vector by a variable). Each is opcode + 128 * (a + 48 * (b + 48 * c)) with a, b, c its
+// prior-register indices (GpuRenderer PackGraphCode), exact in a highp float (< 2^24).
+ivec4 GraphCode(vec4 packed, int i) {
+    int lane = i % 4;
+    int p = int((lane == 0 ? packed.x : lane == 1 ? packed.y : lane == 2 ? packed.z : packed.w) + 0.5);
+    int args = p / 128;
+    return ivec4(p - args * 128, args % 48, (args / 48) % 48, args / 2304);
+}
+
+// The viewDirection input at `position`: the unit vector toward the camera. `viewer` is the camera position, or for
+// an orthographic camera (w = 1) the direction toward it along its axis (ShaderViewDirection in ShaderGraph.cpp).
+vec4 GraphViewToward(vec4 viewer, vec3 position) {
+    if (viewer.w > 0.5) return vec4(viewer.xyz, 0.0);
+    vec3 d = viewer.xyz - position;
+    float l = length(d);
+    return l > 1e-8 ? vec4(d / l, 0.0) : vec4(0.0);
+}
+
 // Per channel without a loop: writing value[channel] in a loop makes the D3D compiler unroll it (X3550).
 float GraphFiniteChannel(float value) { return value != value ? 0.0 : clamp(value, -65504.0, 65504.0); }
 vec4 GraphFinite(vec4 value) {
@@ -30,6 +49,51 @@ vec4 GraphFinite(vec4 value) {
 }
 
 // Instructions 8..24; `literal` is the instruction's value (swizzle channels).
+// hash13 / value noise / fbm of the three.js prototype. Must match Hash13, ShaderNoise and ShaderFbm in
+// ShaderGraph.cpp. Compiled graphs call GraphNoise/GraphFbm/GraphPow/GraphSmoothstep by name (GraphSource.cpp).
+// Parameters are never written: a written parameter becomes `inout` in the generated HLSL/GLSL, and compiled
+// graphs pass registers (GraphFbm(oeg5.xyz)) that must not change.
+float GraphHash(vec3 cell) {
+    vec3 p = fract(cell * 0.1031);
+    float d = p.x * (p.z + 31.32) + p.y * (p.y + 31.32) + p.z * (p.x + 31.32);
+    p += vec3(d);
+    return fract((p.x + p.y) * p.z);
+}
+float GraphNoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    float near = mix(mix(GraphHash(i), GraphHash(i + vec3(1.0, 0.0, 0.0)), f.x),
+                     mix(GraphHash(i + vec3(0.0, 1.0, 0.0)), GraphHash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y);
+    float far = mix(mix(GraphHash(i + vec3(0.0, 0.0, 1.0)), GraphHash(i + vec3(1.0, 0.0, 1.0)), f.x),
+                    mix(GraphHash(i + vec3(0.0, 1.0, 1.0)), GraphHash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y);
+    return mix(near, far, f.z);
+}
+float GraphFbm(vec3 position) {
+    vec3 p = position;
+    float amplitude = 0.5, sum = 0.0;
+    for (int octave = 0; octave < 4; ++octave) {
+        sum += amplitude * GraphNoise(p);
+        p *= 2.03;
+        amplitude *= 0.5;
+    }
+    return sum;
+}
+// pow of a non-positive base is 0; smoothstep(edge0, edge1, x) with equal edges is step(edge0, x).
+float GraphPowChannel(float a, float b) { return a <= 0.0 ? 0.0 : exp2(b * log2(a)); }
+vec4 GraphPow(vec4 a, vec4 b) {
+    return vec4(GraphPowChannel(a.x, b.x), GraphPowChannel(a.y, b.y), GraphPowChannel(a.z, b.z), GraphPowChannel(a.w, b.w));
+}
+float GraphSmoothChannel(float e0, float e1, float x) {
+    if (e1 == e0) return x < e0 ? 0.0 : 1.0;
+    float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+vec4 GraphSmoothstep(vec4 e0, vec4 e1, vec4 x) {
+    return vec4(GraphSmoothChannel(e0.x, e1.x, x.x), GraphSmoothChannel(e0.y, e1.y, x.y),
+                GraphSmoothChannel(e0.z, e1.z, x.z), GraphSmoothChannel(e0.w, e1.w, x.w));
+}
+
 vec4 GraphOp(int op, vec4 a, vec4 b, vec4 c, vec4 literal) {
     vec4 value = vec4(0.0);
     if (op == 8) value = a+b;
@@ -55,6 +119,11 @@ vec4 GraphOp(int op, vec4 a, vec4 b, vec4 c, vec4 literal) {
         ivec4 channels = ivec4(literal);
         value = vec4(a[channels.x],a[channels.y],a[channels.z],a[channels.w]);
     }
+    else if (op == 32) value = GraphPow(a,b);
+    else if (op == 33) value = vec4(length(a));
+    else if (op == 34) value = GraphSmoothstep(a,b,c);
+    else if (op == 35) value = vec4(GraphNoise(a.xyz));
+    else if (op == 36) value = vec4(GraphFbm(a.xyz));
     return value;
 }
 @end
@@ -90,7 +159,8 @@ layout(binding=3) uniform mesh_vs_graph {
     vec4 vgraph_base_color; // material base color and opacity (no texture in this stage)
     vec4 vgraph_uv_rect;    // as uv_rect / uv_tiling of mesh_material
     vec4 vgraph_uv_tiling;
-    vec4 vgraph_code[48];
+    vec4 vgraph_viewer;     // the camera, for viewDirection (GraphViewToward)
+    vec4 vgraph_code[12];  // packed instructions (GraphCode), for graphs of up to 48 nodes
     vec4 vgraph_value[48];
     vec4 vgraph_uniform[8];
 };
@@ -109,6 +179,7 @@ out vec4 v_color;
 out vec4 v_particle;
 out vec4 v_custom;
 out vec3 v_wpos;
+out vec3 v_opos;           // the vertex position in the mesh's own space (rest pose, before skinning): objectPosition
 out vec3 v_nrm;
 out vec4 v_tan;
 centroid out vec2 v_uv;
@@ -125,6 +196,8 @@ float VGraphTime() { return vgraph_control.w; }
 vec4 VGraphBaseColor() { return vgraph_base_color * color0; }
 vec4 VGraphParticle() { return particle0 + item_particle; }
 vec4 VGraphCustom() { return custom0 + item_custom; }
+vec4 VGraphViewDirection(vec3 wpos) { return GraphViewToward(vgraph_viewer, wpos); }
+vec4 VGraphObjectPosition() { return vec4(position, 1.0); }
 
 vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
     if (vgraph_control.x < 0.5) return vec3(0.0);
@@ -132,7 +205,7 @@ vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
     for (int i = 0; i < 48; ++i) registers[i] = vec4(0.0);
     for (int i = 0; i < 48; ++i) {
         if (i >= int(vgraph_control.x)) break;
-        ivec4 code = ivec4(vgraph_code[i]);
+        ivec4 code = GraphCode(vgraph_code[i / 4], i);
         vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
         vec4 value = vec4(0.0);
         if (code.x == 0) value = vgraph_value[i];
@@ -150,6 +223,8 @@ vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
         else if (code.x == 30) value = vec4(VGraphCustom().z);
         else if (code.x == 31) value = vec4(VGraphCustom().w);
         else if (code.x == 7) value = vec4(1.0);  // no texture in the vertex stage
+        else if (code.x == 44) value = VGraphViewDirection(wpos);
+        else if (code.x == 45) value = VGraphObjectPosition();
         else value = GraphOp(code.x, a, b, c, vgraph_value[i]);
         registers[i] = GraphFinite(value);
     }
@@ -170,6 +245,7 @@ void main() {
     v_nrm = normalize((normal_mat * skin_normal * vec4(normal, 0.0)).xyz);
     wp.xyz += VertexOffset(wp.xyz, v_nrm, (texcoord * vgraph_uv_rect.zw + vgraph_uv_rect.xy) * vgraph_uv_tiling.xy + vgraph_uv_tiling.zw);
     v_wpos = wp.xyz;
+    v_opos = position;
     v_tan = vec4(normalize((model * skin * vec4(tangent.xyz, 0.0)).xyz), tangent.w);
     v_uv = texcoord;
     v_color = color0;
@@ -201,11 +277,15 @@ layout(binding=1) uniform mesh_material {
     vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets, y: 1 = surface_aux writes depth (depth of field),
                       // z: fog mode (0 = none, 1 = mix toward fog color, 2 = additive: fade out)
     vec4 graph_control; // node count, color output, emissive output (-1 absent), simulation seconds
-    vec4 graph_outputs; // x: normal output (-1 absent)
-    vec4 graph_code[48]; // opcode and three prior-register indices
+    vec4 graph_outputs; // x: normal output, y: light output (-1 absent)
+    vec4 graph_viewer;   // the camera, for viewDirection (GraphViewToward)
+    vec4 graph_code[12]; // packed instructions (GraphCode): the interpreter runs graphs of up to 48 nodes; larger
+                         // ones only as their compiled program (GpuRenderer GraphPipeline)
     vec4 graph_value[48];
     vec4 graph_uniform[8];
 };
+// Color textures (base, emissive, decals) of a linear project are sRGB images (SRGB8A8): the sampler has decoded
+// them before filtering (GpuRenderer ColorTextureFor), so texels are used as they come in either color space.
 @end
 
 @block surface_graph
@@ -215,9 +295,14 @@ float GraphTime() { return graph_control.w; }
 vec4 GraphPosition() { return vec4(v_wpos, 1.0); }
 vec4 GraphParticle() { return v_particle; }
 vec4 GraphCustom() { return v_custom; }
+vec4 GraphViewDirection() { return GraphViewToward(graph_viewer, v_wpos); }
+vec4 GraphObjectPosition() { return vec4(v_opos, 1.0); }
 // Explicit level zero matches the software texture sampler and avoids
 // undefined implicit derivatives in data-dependent instruction flow.
-vec4 GraphTexture(vec2 uv) { return textureLod(sampler2D(base_tex,base_smp),uv,0.0); }
+vec4 GraphTexture(vec2 uv) {
+    vec4 texel = textureLod(sampler2D(base_tex,base_smp),uv,0.0);
+    return texel;
+}
 
 // `normal_out` is the graph's lighting normal, zero when it has none.
 void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission, out vec3 normal_out) {
@@ -228,7 +313,7 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
     for (int i = 0; i < 48; ++i) registers[i] = vec4(0.0);
     for (int i = 0; i < 48; ++i) {
         if (i >= int(graph_control.x)) break;
-        ivec4 code = ivec4(graph_code[i]);
+        ivec4 code = GraphCode(graph_code[i / 4], i);
         vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
         vec4 value = vec4(0.0);
         if (code.x == 0) value = graph_value[i];
@@ -246,6 +331,9 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
         else if (code.x == 29) value = vec4(GraphCustom().y);
         else if (code.x == 28) value = vec4(GraphCustom().x);
         else if (code.x == 7) value = GraphTexture(a.xy);
+        else if (code.x == 40) value = vec4(GraphAmbient(normal), 0.0);
+        else if (code.x == 44) value = GraphViewDirection();
+        else if (code.x == 45) value = GraphObjectPosition();
         else value = GraphOp(code.x, a, b, c, graph_value[i]);
         registers[i] = GraphFinite(value);
     }
@@ -254,6 +342,14 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
     alpha = clamp(result.a,0.0,1.0);
     if (graph_control.z >= 0.0) emission = registers[int(graph_control.z)].rgb;
     if (graph_outputs.x >= 0.0) normal_out = registers[int(graph_outputs.x)].xyz;
+}
+
+// What one light adds to a surface whose graph has a `light` output (graph_outputs.y). Only compiled graph
+// programs have it: GpuRenderer replaces this body with the graph (GraphLightBody in GraphSource.cpp; keep the
+// parameter names). An interpreter here would sit inside the light loop of mesh_fs, and the D3D compiler unrolls
+// that into a compile of minutes for every program; a graph whose program does not compile gets no light.
+vec3 LightGraph(vec2 uv, vec3 normal, vec3 base, float alpha, vec3 light_vector, vec3 light_color, float light_atten) {
+    return vec3(0.0) * (light_atten + alpha + uv.x + normal.x + base.x + light_vector.x + light_color.x);
 }
 
 @end
@@ -492,6 +588,7 @@ in vec4 v_color;
 in vec4 v_particle;
 in vec4 v_custom;
 in vec3 v_wpos;
+in vec3 v_opos;
 in vec3 v_nrm;
 in vec4 v_tan;
 centroid in vec2 v_uv;
@@ -599,6 +696,23 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, floa
     return (diffuse + F * spec) * ndl;
 }
 
+// The ambient input of surface graphs: the diffuse ambient light at normal n (image environment, sky colors or
+// the flat/hemisphere ambient), as the PBR path below uses it. Mirrors Lighting::AmbientAt in SoftwareRenderer.cpp.
+vec3 GraphAmbient(vec3 n) {
+    if (env_sky.w > 0.5) {
+        if (env_map.x > 0.5) {
+            vec3 m = env_dir(n);
+            return max(env_coefficient(0) + env_coefficient(1) * m.y + env_coefficient(2) * m.z + env_coefficient(3) * m.x +
+                       env_coefficient(4) * (m.x * m.y) + env_coefficient(5) * (m.y * m.z) +
+                       env_coefficient(6) * (3.0 * m.z * m.z - 1.0) + env_coefficient(7) * (m.x * m.z) +
+                       env_coefficient(8) * (m.x * m.x - m.y * m.y), vec3(0.0));
+        }
+        return mix(sky_color(vec3(0.0, -1.0, 0.0)), sky_color(vec3(0.0, 1.0, 0.0)), n.y * 0.5 + 0.5);
+    }
+    if (ambient_ground.w > 0.5) return mix(ambient_ground.rgb, ambient.rgb, n.y * 0.5 + 0.5);
+    return ambient.rgb;
+}
+
 @include_block graph_ops
 @include_block surface_graph
 
@@ -658,6 +772,8 @@ void main() {
     if (flags.w > 0.5 && !gl_FrontFacing) graphNormal = -graphNormal;
     vec3 graphEmission;
     vec3 graphLightNormal;
+    vec3 surfaceBase = base;  // the baseColor input of a light graph
+    float surfaceAlpha = alpha;
     SurfaceGraph(uv,graphNormal,base,alpha,graphEmission,graphLightNormal);
     if (v_sprite_light.w > 0.5) alpha *= mask2d_alpha();
     if (alpha < flags.z) {
@@ -709,6 +825,54 @@ void main() {
             ao = 1.0 + pbr.w * (texture(sampler2D(occlusion_tex, base_smp), uv).r - 1.0);
         }
         ao *= ambient_visibility(v_wpos, ng);
+        if (graph_control.x > 0.5 && graph_outputs.y >= 0.0) {
+            // A graph with a light output shades the surface itself (Godot's light()): its color is the ambient
+            // part, then each light adds LightGraph with its vector, color and attenuation (shadows included).
+            // Mirrors Lighting::ShadeGraph in SoftwareRenderer.cpp.
+            color = base * ao;
+            int graphDirs = int(counts.x), graphPoints = int(counts.y), graphSpots = int(fog_range.z);
+            float graphSunLit = (graphDirs > 0 && counts.z > 0.5) ? shadow_lit(v_wpos, ng) : 1.0;
+            // Directional lights, then point lights, then spot lights, in one loop with one LightGraph call
+            // (three loops each calling it made the D3D compiler unroll three copies of the interpreter).
+            for (int li = 0; li < 28; li++) {
+                if (li >= graphDirs + graphPoints + graphSpots) break;
+                vec3 lightVector, lightColor;
+                float lightAtten;
+                if (li < graphDirs) {
+                    lightVector = -dir_dir[li].xyz;
+                    lightColor = dir_color[li].rgb;
+                    lightAtten = li == 0 ? graphSunLit : 1.0;
+                } else if (li < graphDirs + graphPoints) {
+                    int i = li - graphDirs;
+                    vec3 d = point_pos[i].xyz - v_wpos;
+                    float dist = length(d);
+                    float range = point_pos[i].w;
+                    if (dist >= range || dist < 1e-5) continue;
+                    float fall = 1.0 - dist / range;
+                    lightVector = d / dist;
+                    lightColor = point_color[i].rgb;
+                    lightAtten = fall * fall * local_shadow_lit(int(point_color[i].w), point_pos[i].xyz, v_wpos, ng);
+                } else {
+                    int i = li - graphDirs - graphPoints;
+                    vec4 position = texelFetch(sampler2D(spot_tex, spot_smp), ivec2(i, 0), 0);
+                    vec4 direction = texelFetch(sampler2D(spot_tex, spot_smp), ivec2(i, 1), 0);
+                    vec4 radiance = texelFetch(sampler2D(spot_tex, spot_smp), ivec2(i, 2), 0);
+                    vec3 d = position.xyz - v_wpos;
+                    float dist = length(d);
+                    if (dist >= position.w || dist < 1e-5) continue;
+                    float cosine = dot(direction.xyz, -d / dist);
+                    float inner = radiance.w, outer = direction.w;
+                    float t = inner == outer ? (cosine >= outer ? 1.0 : 0.0) : clamp((cosine - outer) / (inner - outer), 0.0, 1.0);
+                    float cone = t * t * (3.0 - 2.0 * t);
+                    if (cone <= 0.0) continue;
+                    float fall = 1.0 - dist / position.w;
+                    lightVector = d / dist;
+                    lightColor = radiance.rgb;
+                    lightAtten = fall * fall * cone * local_shadow_lit(int(light_data(74 + i).x), position.xyz, v_wpos, ng);
+                }
+                color += LightGraph(uv, graphNormal, surfaceBase, surfaceAlpha, lightVector, lightColor, lightAtten);
+            }
+        } else {
         vec3 v = normalize(eye.xyz - v_wpos);
         float ndv = max(dot(n, v), 1e-4);
         vec3 diffuse = base * (1.0 - metallic);
@@ -845,6 +1009,7 @@ void main() {
             float localLit = local_shadow_lit(int(light_data(74 + i).x), position.xyz, v_wpos, ng);
             color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * radiance.rgb * (fall * fall * cone) * localLit;
         }
+        }  // PBR
     } else if (v_sprite_light.z > 0.5) {
         vec3 ng = normalize(v_nrm);
         if (flags.w > 0.5 && !gl_FrontFacing) ng = -ng;
@@ -961,6 +1126,7 @@ in vec4 v_color;
 in vec4 v_particle;
 in vec4 v_custom;
 in vec3 v_wpos;
+in vec3 v_opos;
 in vec3 v_nrm;
 in vec4 v_tan;
 in vec2 v_uv;
@@ -968,6 +1134,7 @@ in vec4 v_sprite_mask;  // unused here; declared to match mesh_vs
 in vec4 v_sprite_light;
 in vec4 v_sprite_ambient;
 out vec4 frag_color;
+vec3 GraphAmbient(vec3 n) { return vec3(0.0); }  // shadow/depth/mask passes: only alpha and offsets matter here
 @include_block graph_ops
 @include_block surface_graph
 void main() {
@@ -1107,16 +1274,22 @@ void main() {
 @end
 
 @fs composite_fs
+@include_block graph_ops
 layout(binding=0) uniform composite_params {
     vec4 target;         // xy: output size in pixels
     vec4 outline_color;  // rgb; a > 0 enables the outline
     vec4 vignette;       // x: strength, y: radius, z: softness; zero strength leaves color unchanged
-    vec4 tone_mapping;   // x: exposure multiplier, y: 1 = Reinhard, 0 = disabled
+    vec4 tone_mapping;   // x: exposure multiplier, y: 1 = Reinhard, 2 = ACES, 0 = disabled, z: 1 = encode linear light as sRGB
     vec4 bloom_strength; // x: blurred HDR highlight strength, before exposure
     vec4 post_stage;     // x: source already processed, y: FXAA enabled, zw: reciprocal source size
     vec4 grade_shadow;   // rgb: shadow tint, w: 1 = color grading on
     vec4 grade_high;     // rgb: highlight tint
     vec4 grade_params;   // x: saturation, y: contrast
+    vec4 vignette_color; // rgb: what the edges blend toward (black = plain darkening)
+    vec4 post_graph;     // x: node count (0 = none), y: color node, z: before tone mapping, w: simulation time
+    vec4 post_code[64];  // opcode and three prior-register indices (ShaderGraph.cpp numbering)
+    vec4 post_value[64];
+    vec4 post_uniform[8];
 };
 
 layout(binding=0) uniform texture2D scene_tex;
@@ -1128,17 +1301,25 @@ layout(binding=2) uniform sampler bloom_smp;
 
 out vec4 frag_color;
 
+// Must match LinearToSrgb in render/ColorSpace.h.
+vec3 LinearToSrgb(vec3 c) {
+    vec3 x = clamp(c, 0.0, 1.0);
+    return mix(x * 12.92, 1.055 * pow(x, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), x));
+}
+
 vec3 DisplayColor(vec2 uv) {
-    vec3 c = texture(sampler2D(scene_tex, scene_smp), uv).rgb;
+    // Level zero explicitly (the targets have one level): the post graph samples inside a dynamic loop.
+    vec3 c = textureLod(sampler2D(scene_tex, scene_smp), uv, 0.0).rgb;
     if (post_stage.x > 0.5) return c;
     if (bloom_strength.x > 0.0) {
-        c += texture(sampler2D(bloom_tex, bloom_smp), uv).rgb * bloom_strength.x;
+        c += textureLod(sampler2D(bloom_tex, bloom_smp), uv, 0.0).rgb * bloom_strength.x;
         c = clamp(c, 0.0, 65504.0);
     }
     c *= tone_mapping.x;
     if (tone_mapping.y > 1.5) c = c * (2.51 * c + 0.03) / (c * (2.43 * c + 0.59) + 0.14);
     else if (tone_mapping.y > 0.5) c = c / (vec3(1.0) + c);
     c = clamp(c, 0.0, 1.0);
+    if (tone_mapping.z > 0.5) c = LinearToSrgb(c);
     if (grade_shadow.w > 0.5) {  // Grade in PostProcess.h
         const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
         float t = clamp(dot(c, lw) / 0.9, 0.0, 1.0);
@@ -1151,7 +1332,7 @@ vec3 DisplayColor(vec2 uv) {
     }
     if (vignette.x > 0.0) {
         float t = clamp((length(uv * 2.0 - 1.0) - vignette.y) / vignette.z, 0.0, 1.0);
-        c *= 1.0 - vignette.x * t * t * (3.0 - 2.0 * t);
+        c *= mix(vec3(1.0), vignette_color.rgb, vignette.x * t * t * (3.0 - 2.0 * t));
     }
     return c;
 }
@@ -1178,9 +1359,54 @@ vec3 FxaaColor(vec2 uv) {
     return lb < lo || lb > hi ? a : b;
 }
 
+// Post graph (PostProcess.shader) on the scene or processed display image. Must match the post stage of
+// EvaluateShaderGraph with the inputs SoftwareRenderer gives it: sceneColor through FXAA when it is on,
+// sceneBlur a normalized 5x5 gaussian (SceneBlurWeight) of the plain image, texel = (1/w, 1/h, w, h).
+// The pre-bloom pass sets post_stage.x with no FXAA, so DisplayColor returns raw scene values.
+// Inputs of a post graph, read by compiled post programs (GraphPostBody in GraphSource.cpp) the same way.
+vec3 PostScene(vec2 uv) { return post_stage.y > 0.5 ? FxaaColor(uv) : DisplayColor(uv); }
+vec4 PostUniform(int slot) { return post_uniform[slot]; }
+float PostTime() { return post_graph.w; }
+vec4 PostTexel() { return vec4(post_stage.zw, 1.0 / post_stage.zw); }
+
+vec3 PostBlur(vec2 uv, float spacing) {
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    for (int j = -2; j <= 2; ++j) {
+        for (int i = -2; i <= 2; ++i) {
+            float weight = exp(-float(i * i + j * j) * 0.35);
+            sum += DisplayColor(uv + vec2(float(i), float(j)) * spacing * post_stage.zw) * weight;
+            total += weight;
+        }
+    }
+    return sum / total;
+}
+
+// The interpreter: GpuRenderer replaces this body with the compiled graph (GraphPostBody) when it can.
+vec3 PostGraph(vec2 uv) {
+    vec4 registers[64];
+    for (int i = 0; i < 64; ++i) registers[i] = vec4(0.0);
+    for (int i = 0; i < 64; ++i) {
+        if (i >= int(post_graph.x)) break;
+        ivec4 code = ivec4(post_code[i]);
+        vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
+        vec4 value = vec4(0.0);
+        if (code.x == 0) value = post_value[i];
+        else if (code.x == 1) value = PostUniform(int(post_value[i].x));
+        else if (code.x == 2) value = vec4(uv, 0.0, 0.0);
+        else if (code.x == 5) value = vec4(PostTime());
+        else if (code.x == 37) value = vec4(PostScene(a.xy), 1.0);
+        else if (code.x == 38) value = vec4(PostBlur(a.xy, b.x), 1.0);
+        else if (code.x == 39) value = PostTexel();
+        else value = GraphOp(code.x, a, b, c, post_value[i]);
+        registers[i] = GraphFinite(value);
+    }
+    return clamp(registers[int(post_graph.y)].rgb, 0.0, post_graph.z > 0.5 ? 65504.0 : 1.0);
+}
+
 void main() {
     vec2 uv = (gl_FragCoord.xy - target.zw) / target.xy;
-    vec3 c = post_stage.y > 0.5 ? FxaaColor(uv) : DisplayColor(uv);
+    vec3 c = post_stage.x > 0.5 && post_graph.x > 0.5 ? PostGraph(uv) : (post_stage.y > 0.5 ? FxaaColor(uv) : DisplayColor(uv));
     if (outline_color.a > 0.0) {
         ivec2 size = textureSize(sampler2D(mask_tex, mask_smp), 0);
         ivec2 p = ivec2(uv * vec2(size));

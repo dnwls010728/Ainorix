@@ -88,11 +88,14 @@ inline float FogAmount(const PostProcess& s, float distance) {
     return s.fog * Clamp((distance - s.fogStart) / (s.fogEnd - s.fogStart), 0, 1);
 }
 
-// Must match composite_fs: normalized pixel-center UV, cubic smoothstep, no aspect correction.
-inline float VignetteFactor(const PostProcess& settings, float u, float v) {
+// Must match composite_fs: normalized pixel-center UV, cubic smoothstep, no aspect correction. The edges
+// blend toward vignetteColor (black: plain darkening by 1 - strength * t).
+inline Color VignetteFactor(const PostProcess& settings, float u, float v) {
     float x = u * 2 - 1, y = v * 2 - 1;
     float t = Clamp((std::sqrt(x * x + y * y) - settings.vignetteRadius) / settings.vignetteSoftness, 0, 1);
-    return 1 - settings.vignette * t * t * (3 - 2 * t);
+    const float amount = settings.vignette * t * t * (3 - 2 * t);
+    const Color& c = settings.vignetteColor;
+    return Color(1 + (c.r - 1) * amount, 1 + (c.g - 1) * amount, 1 + (c.b - 1) * amount);
 }
 
 // Depth of field. Must match dof_fs. `projA`/`projB` are the projection's z row (elements (2,2) and

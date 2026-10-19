@@ -14,6 +14,7 @@
 namespace oe {
 
 class AssetManager;
+struct PostProcess;
 
 // What a frame draws, collected from the scene the same way for every
 // renderer so the software and GPU backends agree on meshes, materials and
@@ -83,18 +84,47 @@ struct DrawCall {
     size_t submesh = 0;
     Material material;
     bool blend = false;
+    // 0: the surface itself; 1..: an extra pass of it (Material::nextPass chain, outline shell). Extra passes
+    // keep their own displaced positions and stay out of the depth prepass and the selection mask.
+    int pass = 0;
 };
 struct RenderLights;
+// Values of the reserved graph uniforms `screenSize` and `pixelScale` for one view (ShaderGraph).
+struct GraphViewInputs {
+    Vec4 screenSize;  // width, height, 1/width, 1/height of the render target
+    Vec4 pixelScale;  // world size of a pixel at view distance d: d * x + y
+};
+// From the view's projection (OpenGL clip space, as RenderView::proj) and the target size in pixels.
+GraphViewInputs MakeGraphViewInputs(const Mat4& proj, int width, int height);
+
 // `lights` (optional) supplies the first directional light for shader graphs that declare
 // the reserved `lightDirection` uniform; `cameraPosition` is always bound to `eye` and `playing`
-// to 1 or 0 (RenderView::playing).
+// to 1 or 0 (RenderView::playing); `view` (optional) supplies `screenSize` and `pixelScale`, else
+// their declared values stay. Each surface is followed by its extra passes (pass 1..): the material's
+// nextPass chain and, for opaque ones with `outlineWidth` > 0, an OutlineMaterial shell; opaque passes come
+// after all opaque surfaces, blended ones sort right after their surface.
 std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye, const RenderLights* lights = nullptr,
-                                    bool playing = false);
+                                    bool playing = false, const GraphViewInputs* view = nullptr);
+
+// PostProcess.shader, loaded and checked the same way for both renderers.
+struct PostGraph {
+    std::shared_ptr<const ShaderGraph> graph;  // null: no post graph, or it failed (logged once per problem)
+    std::array<Vec4, ShaderGraph::kMaxUniforms> uniforms{};  // graph defaults with PostProcess.shaderUniforms
+};
+PostGraph ResolvePostGraph(const PostProcess& post, AssetManager* assets);
+
+// The engine's outline graphs: vertex offset = world normal * `width`, unlit colour `color`; the
+// pixel one scales the width by the pixel size at the vertex (reserved cameraPosition and pixelScale).
+const std::shared_ptr<const ShaderGraph>& OutlineShaderGraph(bool pixels = false);
+// The shell pass of `source`'s outline: unlit, cull front, castShadows false, OutlineShaderGraph with
+// source.outlineWidth/outlineColor/outlinePixels (the same as a nextPass material written by hand).
+Material OutlineMaterial(const Material& source);
 
 // Vertex stage of a shader graph with an `offset` output, as mesh_vs runs it: calls
 // fn(vertex, world position before the offset, offset) once for every vertex the draw call's
-// submesh uses. Does nothing for materials without such a graph.
-void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float time,
+// submesh uses. Does nothing for materials without such a graph. `viewer`: the camera (ShaderViewer in Renderer.h);
+// `linear`: RenderLights::linear (vertex colors in the baseColor input are decoded, Mesh::VertexColor).
+void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float time, const Vec4& viewer, bool linear,
                          const std::function<void(uint32_t, const Vec3&, const Vec3&)>& fn);
 // Cull margin (world units) of a draw whose graph has an `offset` output: the graph's declared
 // `maxOffset`, else kDefaultOffsetMargin; 0 for materials without such a graph.
@@ -143,7 +173,7 @@ struct RenderSpotLight {
 };
 
 // Shared normalization and rotation contract for renderer light gathering and editor cone guides.
-RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id);
+RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id, bool linear = false);
 // Angular smoothstep, given a normalized direction from the light toward the surface.
 inline float SpotConeWeight(const RenderSpotLight& light, const Vec3& fromLight) {
     const float cosine = Dot(light.dir, fromLight);
@@ -286,6 +316,10 @@ struct RenderLights {
     float shadowStrength = 0.75f;
     float shadowDistance = 0.0f;  // > 0: the shadow map covers the camera's view up to this distance
     int shadowCascades = 1;      // clamped 1..4; one retains the legacy fit and shading
+    // Linear lighting (AssetManager::LinearColor, render/ColorSpace.h): every color here is decoded already,
+    // BuildDrawList decodes material colors, and the renderers decode color textures and vertex colors and
+    // encode the lit image.
+    bool linear = false;
 };
 
 constexpr int kMaxLocalShadowLights = 2;   // Shared point/spot budget, independent of the sun.

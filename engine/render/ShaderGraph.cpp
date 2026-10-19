@@ -16,8 +16,36 @@ const OpInfo kOps[] = {
     {"fract",ShaderOp::Fract,1}, {"abs",ShaderOp::Abs,1}, {"clamp",ShaderOp::Clamp,3},
     {"mix",ShaderOp::Mix,3}, {"step",ShaderOp::Step,2}, {"dot",ShaderOp::Dot,2},
     {"normalize",ShaderOp::Normalize,1}, {"swizzle",ShaderOp::Swizzle,1},
-    {"particleAge",ShaderOp::ParticleAge,0}, {"particleRandom",ShaderOp::ParticleRandom,0}, {"particleSpeed",ShaderOp::ParticleSpeed,0}, {"particleCustom0",ShaderOp::ParticleCustom0,0}, {"particleCustom1",ShaderOp::ParticleCustom1,0}, {"particleCustom2",ShaderOp::ParticleCustom2,0}, {"particleCustom3",ShaderOp::ParticleCustom3,0}
+    {"particleAge",ShaderOp::ParticleAge,0}, {"particleRandom",ShaderOp::ParticleRandom,0}, {"particleSpeed",ShaderOp::ParticleSpeed,0}, {"particleCustom0",ShaderOp::ParticleCustom0,0}, {"particleCustom1",ShaderOp::ParticleCustom1,0}, {"particleCustom2",ShaderOp::ParticleCustom2,0}, {"particleCustom3",ShaderOp::ParticleCustom3,0},
+    {"pow",ShaderOp::Pow,2}, {"length",ShaderOp::Length,1}, {"smoothstep",ShaderOp::Smoothstep,3},
+    {"noise",ShaderOp::Noise,1}, {"fbm",ShaderOp::Fbm,1},
+    {"sceneColor",ShaderOp::SceneColor,1}, {"sceneBlur",ShaderOp::SceneBlur,2}, {"texel",ShaderOp::Texel,0},
+    {"ambient",ShaderOp::Ambient,0}, {"lightVector",ShaderOp::LightVector,0}, {"lightColor",ShaderOp::LightColor,0},
+    {"lightAttenuation",ShaderOp::LightAttenuation,0}, {"viewDirection",ShaderOp::ViewDirection,0},
+    {"objectPosition",ShaderOp::ObjectPosition,0}
 };
+// Inputs that exist only on a surface (mesh, sprite, particle) or only on the display image.
+bool SurfaceOnly(ShaderOp op) {
+    switch (op) {
+        case ShaderOp::Position: case ShaderOp::Normal: case ShaderOp::BaseColor: case ShaderOp::Texture: case ShaderOp::Ambient:
+        case ShaderOp::LightVector: case ShaderOp::LightColor: case ShaderOp::LightAttenuation:
+        case ShaderOp::ViewDirection: case ShaderOp::ObjectPosition:
+        case ShaderOp::ParticleAge: case ShaderOp::ParticleRandom: case ShaderOp::ParticleSpeed:
+        case ShaderOp::ParticleCustom0: case ShaderOp::ParticleCustom1: case ShaderOp::ParticleCustom2: case ShaderOp::ParticleCustom3:
+            return true;
+        default: return false;
+    }
+}
+bool PostOnly(ShaderOp op) { return op == ShaderOp::SceneColor || op == ShaderOp::SceneBlur || op == ShaderOp::Texel; }
+bool LightInput(ShaderOp op) { return op == ShaderOp::LightVector || op == ShaderOp::LightColor || op == ShaderOp::LightAttenuation; }
+float Fract(float x) { return x - std::floor(x); }
+// hash13 of the three.js prototype ("hash without sine"): a lattice point to 0..1.
+float Hash13(float x, float y, float z) {
+    x = Fract(x * 0.1031f); y = Fract(y * 0.1031f); z = Fract(z * 0.1031f);
+    const float d = x * (z + 31.32f) + y * (y + 31.32f) + z * (x + 31.32f);
+    x += d; y += d; z += d;
+    return Fract((x + y) * z);
+}
 bool Vector(const Json& j, Vec4& out) {
     auto finite = [](const Json& v) { return v.isNumber() && std::isfinite(v.asNumber()) && std::fabs(v.asNumber()) <= 65504; };
     if (finite(j)) { const float x = j.asFloat(); out = Vec4(x,x,x,x); return true; }
@@ -32,17 +60,61 @@ bool Index(const Json& j, int count) {
 float Finite(float x) { return std::isnan(x) ? 0 : std::clamp(x, -65504.0f, 65504.0f); }
 }  // namespace
 
+float ShaderNoise(float x, float y, float z) {
+    const float ix = std::floor(x), iy = std::floor(y), iz = std::floor(z);
+    float fx = x - ix, fy = y - iy, fz = z - iz;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    fz = fz * fz * (3 - 2 * fz);
+    auto mix = [](float a, float b, float t) { return a + (b - a) * t; };
+    auto plane = [&](float dz) {
+        return mix(mix(Hash13(ix, iy, iz + dz), Hash13(ix + 1, iy, iz + dz), fx),
+                   mix(Hash13(ix, iy + 1, iz + dz), Hash13(ix + 1, iy + 1, iz + dz), fx), fy);
+    };
+    return mix(plane(0), plane(1), fz);
+}
+
+float ShaderFbm(float x, float y, float z) {
+    float amplitude = 0.5f, sum = 0;
+    for (int octave = 0; octave < 4; ++octave) {
+        sum += amplitude * ShaderNoise(x, y, z);
+        x *= 2.03f; y *= 2.03f; z *= 2.03f;
+        amplitude *= 0.5f;
+    }
+    return sum;
+}
+
+float SceneBlurWeight(int i, int j) { return std::exp(-static_cast<float>(i * i + j * j) * 0.35f); }
+
 bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) {
     auto fail = [&](const std::string& message) { if (error) *error = message; return false; };
     if (!json.isObject()) return fail("shader must be an object");
     for (const auto& field : json.members())
-        if (field.first != "format" && field.first != "nodes" && field.first != "uniforms" &&
-            field.first != "color" && field.first != "emissive" && field.first != "normal" && field.first != "offset" &&
-            field.first != "maxOffset" && field.first != "offsetBounds") return fail("unknown shader field '" + field.first + "'");
+        if (field.first != "format" && field.first != "nodes" && field.first != "uniforms" && field.first != "stage" &&
+            field.first != "color" && field.first != "emissive" && field.first != "normal" && field.first != "offset" && field.first != "light" &&
+            field.first != "maxOffset" && field.first != "offsetBounds" && field.first != "injection") return fail("unknown shader field '" + field.first + "'");
     if (json.has("format") && json["format"].asString() != "ownengine.shader") return fail("format must be ownengine.shader");
-    const Json& nodes = json["nodes"];
-    if (!nodes.isArray() || nodes.size() == 0 || nodes.size() > ShaderGraph::kMaxNodes) return fail("nodes must contain 1.." + std::to_string(ShaderGraph::kMaxNodes) + " instructions");
     ShaderGraph result;
+    if (json.has("stage")) {
+        const std::string stage = json["stage"].asString();
+        if (stage == "post") result.stage = ShaderStage::Post;
+        else if (stage != "surface") return fail("stage must be \"surface\" (materials) or \"post\" (PostProcess.shader)");
+    }
+    const bool post = result.stage == ShaderStage::Post;
+    if (json.has("injection")) {
+        if (!post) return fail("injection is only allowed on a post graph (stage: post)");
+        const std::string injection = json["injection"].asString();
+        if (injection != "afterToneMapping" && injection != "beforeToneMapping")
+            return fail("injection must be \"afterToneMapping\" or \"beforeToneMapping\"");
+        result.beforeToneMapping = injection == "beforeToneMapping";
+    }
+    if (post)
+        for (const char* output : {"emissive", "normal", "offset", "light", "maxOffset", "offsetBounds"})
+            if (json.has(output)) return fail(std::string("a post graph has only a color output, not '") + output + "'");
+    const int maxNodes = ShaderGraph::kMaxNodes;
+    const Json& nodes = json["nodes"];
+    if (!nodes.isArray() || nodes.size() == 0 || nodes.size() > static_cast<size_t>(maxNodes))
+        return fail("nodes must contain 1.." + std::to_string(maxNodes) + " instructions");
     const Json& uniforms = json["uniforms"];
     if (!uniforms.isNull() && (!uniforms.isObject() || uniforms.size() > ShaderGraph::kMaxUniforms))
         return fail("uniforms must be an object with at most 8 named values");
@@ -54,6 +126,8 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
         if (item.first == "cameraPosition") result.cameraUniform = static_cast<int>(result.uniformNames.size());
         if (item.first == "lightDirection") result.lightUniform = static_cast<int>(result.uniformNames.size());
         if (item.first == "playing") result.playingUniform = static_cast<int>(result.uniformNames.size());
+        if (item.first == "screenSize") result.screenUniform = static_cast<int>(result.uniformNames.size());
+        if (item.first == "pixelScale") result.pixelScaleUniform = static_cast<int>(result.uniformNames.size());
         result.uniformNames.push_back(item.first);
     }
     for (size_t index = 0; index < nodes.size(); ++index) {
@@ -63,6 +137,8 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
         const OpInfo* info = nullptr;
         for (const OpInfo& op : kOps) if (node["op"].asString() == op.name) info = &op;
         if (!info) return fail(location + ".op is unknown");
+        if (post && SurfaceOnly(info->op)) return fail(location + ": '" + info->name + "' is a surface input; a post graph reads sceneColor/sceneBlur at uv");
+        if (!post && PostOnly(info->op)) return fail(location + ": '" + info->name + "' needs \"stage\": \"post\" (PostProcess.shader)");
         for (const auto& item : node.members()) {
             const bool value = item.first == "value" && (info->op == ShaderOp::Constant || info->op == ShaderOp::Swizzle);
             const bool name = item.first == "name" && info->op == ShaderOp::Uniform;
@@ -89,6 +165,7 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
             if (it == result.uniformNames.end()) return fail(location + ".name is not a declared uniform");
             instruction.value.x = static_cast<float>(it - result.uniformNames.begin());
         }
+        result.objectSpace = result.objectSpace || info->op == ShaderOp::ObjectPosition;
         result.instructions.push_back(instruction);
     }
     if (!Index(json["color"], static_cast<int>(nodes.size()))) return fail("color must reference a node");
@@ -111,6 +188,27 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
             if (!needed[static_cast<size_t>(index)]) continue;
             const ShaderInstruction& instruction = result.instructions[static_cast<size_t>(index)];
             if (instruction.op == ShaderOp::Texture) return fail("offset must not depend on a texture node (nodes[" + std::to_string(index) + "])");
+            if (instruction.op == ShaderOp::Ambient) return fail("offset must not depend on an ambient node (nodes[" + std::to_string(index) + "])");
+            int count = 0;
+            for (const OpInfo& op : kOps) if (op.op == instruction.op) count = op.args;
+            for (int a = 0; a < count; ++a) needed[static_cast<size_t>(instruction.args[static_cast<size_t>(a)])] = true;
+        }
+    }
+    if (json.has("light")) {
+        if (!Index(json["light"], static_cast<int>(nodes.size()))) return fail("light must reference a node");
+        result.light = json["light"].asInt();
+    }
+    // Light inputs exist only while one light is shaded: every other output must not depend on them.
+    for (const auto& [name, output] : std::initializer_list<std::pair<const char*, int>>{
+             {"color", result.color}, {"emissive", result.emissive}, {"normal", result.normal}, {"offset", result.offset}}) {
+        if (output < 0) continue;
+        std::array<bool, ShaderGraph::kMaxNodes> needed{};
+        needed[static_cast<size_t>(output)] = true;
+        for (int index = output; index >= 0; --index) {
+            if (!needed[static_cast<size_t>(index)]) continue;
+            const ShaderInstruction& instruction = result.instructions[static_cast<size_t>(index)];
+            if (LightInput(instruction.op))
+                return fail(std::string(name) + " must not depend on a light input (nodes[" + std::to_string(index) + "]); light inputs feed the light output");
             int count = 0;
             for (const OpInfo& op : kOps) if (op.op == instruction.op) count = op.args;
             for (int a = 0; a < count; ++a) needed[static_cast<size_t>(instruction.args[static_cast<size_t>(a)])] = true;
@@ -192,6 +290,18 @@ std::array<Vec4, ShaderGraph::kMaxNodes> RunGraph(const ShaderGraph& graph, cons
             case ShaderOp::Time: result = Vec4(inputs.time,inputs.time,inputs.time,inputs.time); break;
             case ShaderOp::BaseColor: result = inputs.baseColor; break;
             case ShaderOp::Texture: result = inputs.texture ? inputs.texture(a.x,a.y) : Vec4(1,1,1,1); break;
+            case ShaderOp::SceneColor: result = inputs.scene ? inputs.scene(a.x,a.y) : Vec4(0,0,0,1); break;
+            case ShaderOp::SceneBlur: result = inputs.sceneBlur ? inputs.sceneBlur(a.x,a.y,b.x) : Vec4(0,0,0,1); break;
+            case ShaderOp::Texel: result = inputs.texel; break;
+            case ShaderOp::Ambient: result = inputs.ambient; break;
+            case ShaderOp::LightVector: result = inputs.lightVector; break;
+            case ShaderOp::LightColor: result = inputs.lightColor; break;
+            case ShaderOp::LightAttenuation: result = Vec4(inputs.lightAttenuation, inputs.lightAttenuation, inputs.lightAttenuation, inputs.lightAttenuation); break;
+            case ShaderOp::ViewDirection: result = inputs.viewDirection; break;
+            case ShaderOp::ObjectPosition: result = inputs.objectPosition; break;
+            case ShaderOp::Noise: { const float n = ShaderNoise(a.x,a.y,a.z); result = Vec4(n,n,n,n); break; }
+            case ShaderOp::Fbm: { const float n = ShaderFbm(a.x,a.y,a.z); result = Vec4(n,n,n,n); break; }
+            case ShaderOp::Length: { const float n = std::sqrt(a.x*a.x + a.y*a.y + a.z*a.z + a.w*a.w); result = Vec4(n,n,n,n); break; }
             default: {
                 float av[] = {a.x,a.y,a.z,a.w}, bv[] = {b.x,b.y,b.z,b.w}, cv[] = {c.x,c.y,c.z,c.w};
                 float channels[] = {0,0,0,0};
@@ -216,6 +326,15 @@ std::array<Vec4, ShaderGraph::kMaxNodes> RunGraph(const ShaderGraph& graph, cons
                     case ShaderOp::Dot: channels[k] = dot; break;
                     case ShaderOp::Normalize: channels[k] = length > 1e-8f ? av[k]/length : 0; break;
                     case ShaderOp::Swizzle: channels[k] = av[static_cast<int>(swizzle[k])]; break;
+                    // pow of a non-positive base is 0 (also for exponent 0), so both renderers agree.
+                    case ShaderOp::Pow: channels[k] = av[k] <= 0 ? 0.0f : std::pow(av[k], bv[k]); break;
+                    // smoothstep(edge0 a, edge1 b, x c); equal edges act as step(edge, x).
+                    case ShaderOp::Smoothstep: {
+                        if (bv[k] == av[k]) { channels[k] = cv[k] < av[k] ? 0.0f : 1.0f; break; }
+                        const float t = std::min(std::max((cv[k]-av[k])/(bv[k]-av[k]), 0.0f), 1.0f);
+                        channels[k] = t*t*(3-2*t);
+                        break;
+                    }
                     default: break;
                 }
                 result = Vec4(channels[0],channels[1],channels[2],channels[3]);
@@ -234,6 +353,20 @@ ShaderSurface EvaluateShaderGraph(const ShaderGraph& graph, const ShaderInputs& 
     return {registers[static_cast<size_t>(graph.color)],
             graph.emissive < 0 ? Vec3() : registers[static_cast<size_t>(graph.emissive)].xyz(),
             graph.normal < 0 ? Vec3() : registers[static_cast<size_t>(graph.normal)].xyz()};
+}
+
+Vec3 EvaluateShaderLight(const ShaderGraph& graph, const ShaderInputs& inputs,
+                         const std::array<Vec4, ShaderGraph::kMaxUniforms>& uniforms) {
+    if (graph.light < 0) return Vec3();
+    const Vec4 value = RunGraph(graph, inputs, uniforms, static_cast<size_t>(graph.light) + 1)[static_cast<size_t>(graph.light)];
+    return Vec3(std::max(value.x, 0.0f), std::max(value.y, 0.0f), std::max(value.z, 0.0f));
+}
+
+Vec4 ShaderViewDirection(const Vec4& viewer, const Vec3& position) {
+    if (viewer.w > 0.5f) return Vec4(viewer.x, viewer.y, viewer.z, 0);
+    const Vec3 d = viewer.xyz() - position;
+    const float length = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    return length > 1e-8f ? Vec4(d.x / length, d.y / length, d.z / length, 0) : Vec4();
 }
 
 Vec3 ShaderVertexOffset(const ShaderGraph& graph, const ShaderInputs& inputs,

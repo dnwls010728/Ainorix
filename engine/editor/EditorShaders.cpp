@@ -18,7 +18,8 @@
 
 namespace oe {
 namespace {
-const char* kOutputs[] = {"color", "emissive", "normal", "offset"};
+const char* kOutputs[] = {"color", "emissive", "normal", "offset", "light"};
+constexpr int kOutputCount = static_cast<int>(std::size(kOutputs));
 
 // How a node card is laid out, in canvas units.
 const float kNodeWidth = 200, kPinRow = 24, kValueRow = 26;
@@ -55,9 +56,18 @@ const NodeInfo kNodes[] = {
     {"particleCustom1", &kInputKind, {}, "Effect particles: custom channel 1"},
     {"particleCustom2", &kInputKind, {}, "Effect particles: custom channel 2"},
     {"particleCustom3", &kInputKind, {}, "Effect particles: custom channel 3"},
+    {"ambient", &kInputKind, {}, "The scene's ambient light where the surface faces (color)"},
+    {"lightVector", &kInputKind, {}, "Light output only: direction toward the light being added"},
+    {"lightColor", &kInputKind, {}, "Light output only: color and brightness of that light"},
+    {"lightAttenuation", &kInputKind, {}, "Light output only: how much of that light arrives (distance, cone, shadow)"},
+    {"viewDirection", &kInputKind, {}, "Direction from the surface toward the camera (rim light, fresnel)"},
+    {"objectPosition", &kInputKind, {}, "Position in the model's own space: patterns that stay on it while it moves or animates"},
+    {"texel", &kInputKind, {}, "Post graphs: size of one pixel of the image (1/width, 1/height, width, height)"},
     {"constant", &kValueKind, {}, "A fixed number or color"},
     {"uniform", &kValueKind, {}, "A named value that materials and scripts can change"},
     {"texture", &kTextureKind, {"UV"}, "Samples the material's base texture at the given coordinates"},
+    {"sceneColor", &kTextureKind, {"UV"}, "Post graphs: the rendered image at the given coordinates"},
+    {"sceneBlur", &kTextureKind, {"UV", "Spacing"}, "Post graphs: the image blurred around the coordinates, samples Spacing pixels apart"},
     {"add", &kMathKind, {"A", "B"}, "A + B"},
     {"subtract", &kMathKind, {"A", "B"}, "A - B"},
     {"multiply", &kMathKind, {"A", "B"}, "A x B"},
@@ -75,6 +85,11 @@ const NodeInfo kNodes[] = {
     {"dot", &kVectorKind, {"A", "B"}, "How much two directions agree: 1 same way, 0 at a right angle"},
     {"normalize", &kVectorKind, {"In"}, "Scales a vector to length 1"},
     {"swizzle", &kVectorKind, {"In"}, "Reorders or repeats the channels (x y z w) of the input"},
+    {"pow", &kMathKind, {"Base", "Exponent"}, "Base to the power of Exponent (0 where Base is 0 or below)"},
+    {"smoothstep", &kMathKind, {"Edge 0", "Edge 1", "Value"}, "Smooth 0..1 ramp of Value between Edge 0 and Edge 1"},
+    {"noise", &kMathKind, {"Position"}, "Smooth random value 0..1 that changes over the position (xyz)"},
+    {"fbm", &kMathKind, {"Position"}, "Layered noise: four octaves of noise, cloudy detail 0..1"},
+    {"length", &kVectorKind, {"In"}, "Length of the vector (x y z w)"},
 };
 const NodeInfo* InfoOf(const std::string& op) {
     for (const NodeInfo& info : kNodes) if (op == info.op) return &info;
@@ -85,7 +100,11 @@ ImVec2 NodeSize(const Json& node) {
     const float pins = static_cast<float>(node["args"].size());
     return ImVec2(kNodeWidth, EditorNodeCanvas::kHeader + pins * kPinRow + (HasValueRow(node) ? kValueRow : 0) + (pins > 0 || HasValueRow(node) ? 10 : 6));
 }
-const ImVec2 kSurfaceSize(kNodeWidth, EditorNodeCanvas::kHeader + 4 * kPinRow + 10);
+// The output card: a post graph has only Color.
+int OutputCount(const Json& document) { return EditorShaderIsPost(document) ? 1 : kOutputCount; }
+ImVec2 OutputSize(const Json& document) {
+    return ImVec2(kNodeWidth, EditorNodeCanvas::kHeader + static_cast<float>(OutputCount(document)) * kPinRow + 10);
+}
 
 std::string Sibling(const std::string& path, const std::string& suffix) {
     size_t dot = path.find_last_of('.');
@@ -93,7 +112,8 @@ std::string Sibling(const std::string& path, const std::string& suffix) {
     return path.substr(0, dot) + suffix;
 }
 
-Json NewGraph() {
+Json NewGraph(bool post) {
+    if (post) return Json::parse(R"({"format":"ownengine.shader","stage":"post","uniforms":{},"nodes":[{"op":"uv"},{"op":"sceneColor","args":[0]}],"color":1})");
     return Json::parse(R"({"format":"ownengine.shader","uniforms":{},"nodes":[{"op":"baseColor"}],"color":0})");
 }
 
@@ -158,6 +178,61 @@ std::shared_ptr<const Texture> SurfacePreview(const Json& graph, const Json& mat
     }
     return image;
 }
+
+// A post graph over a small test picture (sky, ground, a lit ball, color bars), the way the software
+// renderer runs it on the display image.
+std::shared_ptr<const Texture> PostPreview(const Json& graph, std::string* error) {
+    ShaderGraph compiled;
+    if (!CompileShaderGraph(graph, compiled, error)) return {};
+    const int size = 128;
+    std::vector<Vec3> picture(static_cast<size_t>(size * size));
+    for (int y = 0; y < size; ++y) for (int x = 0; x < size; ++x) {
+        const float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
+        Vec3 c = v < 0.6f ? Vec3(0.55f, 0.72f, 0.92f) * (1 - v * 0.5f) : Vec3(0.42f, 0.6f, 0.3f) * (1.2f - v * 0.4f);
+        const float bx = (u - 0.5f) / 0.22f, by = (v - 0.5f) / 0.22f;
+        if (bx * bx + by * by < 1) {
+            const float nz = std::sqrt(1 - bx * bx - by * by);
+            const float lit = std::max(0.0f, -0.5f * bx - 0.6f * by + 0.62f * nz);
+            c = Vec3(0.95f, 0.55f, 0.3f) * (0.25f + 0.8f * lit);
+        }
+        if (v > 0.86f) {
+            const Vec3 bars[] = {{0.9f, 0.2f, 0.2f}, {0.95f, 0.85f, 0.2f}, {0.2f, 0.8f, 0.3f}, {0.2f, 0.4f, 0.9f}, {1, 1, 1}, {0, 0, 0}};
+            c = bars[std::min(5, static_cast<int>(u * 6))];
+        }
+        picture[static_cast<size_t>(y * size + x)] = c;
+    }
+    auto sample = [&](float x, float y) {
+        x = Clamp(x, 0, size - 1.0f); y = Clamp(y, 0, size - 1.0f);
+        const int x0 = static_cast<int>(x), y0 = static_cast<int>(y), x1 = std::min(x0 + 1, size - 1), y1 = std::min(y0 + 1, size - 1);
+        const float tx = x - static_cast<float>(x0), ty = y - static_cast<float>(y0);
+        auto at = [&](int px, int py) { return picture[static_cast<size_t>(py * size + px)]; };
+        return (at(x0, y0) * (1 - tx) + at(x1, y0) * tx) * (1 - ty) + (at(x0, y1) * (1 - tx) + at(x1, y1) * tx) * ty;
+    };
+    ShaderInputs input;
+    input.time = 1;
+    input.texel = Vec4(1.0f / size, 1.0f / size, static_cast<float>(size), static_cast<float>(size));
+    input.scene = [&](float u, float v) { const Vec3 c = sample(u * size - 0.5f, v * size - 0.5f); return Vec4(c, 1); };
+    input.sceneBlur = [&](float u, float v, float spacing) {
+        Vec3 sum(0, 0, 0);
+        float total = 0;
+        for (int j = -2; j <= 2; ++j) for (int i = -2; i <= 2; ++i) {
+            const float weight = SceneBlurWeight(i, j);
+            sum += sample(u * size - 0.5f + static_cast<float>(i) * spacing, v * size - 0.5f + static_cast<float>(j) * spacing) * weight;
+            total += weight;
+        }
+        return Vec4(sum * (1 / total), 1);
+    };
+    auto image = std::make_shared<Texture>();
+    image->width = image->height = size;
+    image->texels.resize(static_cast<size_t>(size * size));
+    auto channel = [](float c) { return static_cast<uint32_t>(Clamp(c, 0, 1) * 255 + 0.5f); };
+    for (int y = 0; y < size; ++y) for (int x = 0; x < size; ++x) {
+        input.uv = Vec4((x + 0.5f) / size, (y + 0.5f) / size, 0, 0);
+        const Vec4 c = EvaluateShaderGraph(compiled, input, compiled.defaults).color;
+        image->texels[static_cast<size_t>(y * size + x)] = channel(c.x) | (channel(c.y) << 8) | (channel(c.z) << 16) | 0xFF000000;
+    }
+    return image;
+}
 }
 
 void NativeEditor::Impl::OpenShader(const std::string& path, bool discard) {
@@ -167,7 +242,7 @@ void NativeEditor::Impl::OpenShader(const std::string& path, bool discard) {
         shaderPendingPath = path; shaderPendingOpen = shaderOpenPrompt = true;
         return;
     }
-    Json graph = NewGraph(), material = DefaultMaterialJson();
+    Json graph = NewGraph(shaderNewPost && path.empty()), material = DefaultMaterialJson();
     std::string actualPath = path, materialPath;
     try {
         if (!path.empty()) {
@@ -178,7 +253,8 @@ void NativeEditor::Impl::OpenShader(const std::string& path, bool discard) {
             if (AssetManager::KindOf(path) == "material") {
                 Material check;
                 if (!MaterialFromJson(file, [&] (const std::string& p, std::string* err) { return engine.Assets().GetTexture(p, err); },
-                    check, &error, [&] (const std::string& p, std::string* err) { return engine.Assets().GetShader(p, err); })) {
+                    check, &error, [&] (const std::string& p, std::string* err) { return engine.Assets().GetShader(p, err); },
+                    [&] (const std::string& p, std::string* err) { return engine.Assets().GetMaterial(p, err); })) {
                     Notify(error, true); return;
                 }
                 for (const auto& field : file.members()) material[field.first] = field.second;
@@ -198,7 +274,8 @@ void NativeEditor::Impl::OpenShader(const std::string& path, bool discard) {
     if (!graph.has("uniforms")) graph["uniforms"] = Json::MakeObject();
     shaderDocument = graph; shaderSaved = actualPath.empty() ? Json() : graph;
     shaderPath = actualPath;
-    shaderSavePath = actualPath.empty() ? materialPath.empty() ? "materials/new.shader.json" : Sibling(materialPath, ".shader.json") : actualPath;
+    shaderSavePath = actualPath.empty() ? materialPath.empty() ? (EditorShaderIsPost(graph) ? "shaders/new_post.shader.json" : "materials/new.shader.json") :
+                     Sibling(materialPath, ".shader.json") : actualPath;
     if (actualPath.empty()) {
         std::string seed = shaderSavePath;
         for (int suffix = 1; FileExists(engine.ResolvePath(shaderSavePath)); ++suffix)
@@ -247,7 +324,7 @@ void NativeEditor::Impl::ShaderArrange() {
             if (source >= 0 && source < count) uses[static_cast<size_t>(source)].push_back({i, pin});
         }
     }
-    for (int pin = 0; pin < 4; ++pin) {
+    for (int pin = 0; pin < OutputCount(document); ++pin) {
         const int source = document[kOutputs[pin]].asInt(-1);
         if (source >= 0 && source < count) uses[static_cast<size_t>(source)].push_back({count, pin});
     }
@@ -346,9 +423,12 @@ void NativeEditor::Impl::ShaderPalette() {
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##nodesearch", WithIcon(kIconSearch, Tr("Search nodes")).c_str(), &shaderPaletteFilter);
-    const bool full = shaderDocument["nodes"].size() >= 48;
-    if (full) ImGui::TextColored(ImVec4(1, 0.7f, 0.4f, 1), "%s", Tr("A graph holds at most 48 nodes."));
+    const bool post = EditorShaderIsPost(shaderDocument);
+    const int most = EditorShaderMaxNodes();
+    const bool full = static_cast<int>(shaderDocument["nodes"].size()) >= most;
+    if (full) ImGui::TextColored(ImVec4(1, 0.7f, 0.4f, 1), "%s", Format(Tr("A graph holds at most %d nodes."), most).c_str());
     auto matches = [&](const NodeInfo& info) {
+        if (!EditorShaderOperationInStage(info.op, post)) return false;
         if (shaderPaletteFilter.empty()) return true;
         auto has = [&](const std::string& text) {
             return std::search(text.begin(), text.end(), shaderPaletteFilter.begin(), shaderPaletteFilter.end(),
@@ -395,6 +475,7 @@ void NativeEditor::Impl::ShaderCanvas() {
     const int count = static_cast<int>(shaderDocument["nodes"].size());
     const Json& document = shaderDocument;
     if (shaderFit) {
+        const ImVec2 kSurfaceSize = OutputSize(document);
         ImVec2 low = shaderOutputPos, high = shaderOutputPos + kSurfaceSize;
         for (int n = 0; n < count; ++n) {
             const ImVec2 p = shaderPositions[static_cast<size_t>(n)], size = NodeSize(document["nodes"][n]);
@@ -434,7 +515,7 @@ void NativeEditor::Impl::ShaderCanvas() {
             int source = args[pin].asInt(-1); if (source >= 0 && source < count) wire(source, input(n, pin), n);
         }
     }
-    for (int pin = 0; pin < 4; ++pin) {
+    for (int pin = 0; pin < OutputCount(document); ++pin) {
         int source = document[kOutputs[pin]].asInt(-1);
         if (source >= 0 && source < count) wire(source, input(-1, pin), -2);
     }
@@ -449,10 +530,10 @@ void NativeEditor::Impl::ShaderCanvas() {
         const Json& node = surface ? Json() : document["nodes"][n];
         const std::string op = surface ? std::string() : node["op"].asString();
         const NodeInfo* info = surface ? nullptr : InfoOf(op);
-        int pins = surface ? 4 : static_cast<int>(node["args"].size());
-        const ImVec2 size = surface ? kSurfaceSize : NodeSize(node);
+        int pins = surface ? OutputCount(document) : static_cast<int>(node["args"].size());
+        const ImVec2 size = surface ? OutputSize(document) : NodeSize(node);
         ImVec2 p = point(position);
-        const std::string title = surface ? Tr("Surface Output") : HumanizeName(op);
+        const std::string title = surface ? Tr(EditorShaderIsPost(document) ? "Post Output" : "Surface Output") : HumanizeName(op);
         const std::string badge = surface ? std::string() : "#" + std::to_string(n);
         ImGui::PushID(n);
         canvas.Card(position, size, title.c_str(), surface ? kSurfaceHeader : (info ? info->kind->header : kMathKind.header),
@@ -541,13 +622,17 @@ void NativeEditor::Impl::ShaderProperties() {
     bool valid = OrderEditorShaderGraph(shaderDocument, ordered, &validation);
     if (valid) {
         std::string key = ordered.dump() + shaderMaterial.dump();
-        if (key != shaderPreviewKey) { shaderPreview = SurfacePreview(ordered, shaderMaterial, &validation); shaderPreviewKey = key; }
+        if (key != shaderPreviewKey) {
+            shaderPreview = EditorShaderIsPost(ordered) ? PostPreview(ordered, &validation) : SurfacePreview(ordered, shaderMaterial, &validation);
+            shaderPreviewKey = key;
+        }
         if (shaderPreview) {
             // As large as the panel allows, centered.
             const float side = std::max(96.0f, std::min(220.0f, ImGui::GetContentRegionAvail().x));
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (ImGui::GetContentRegionAvail().x - side) * 0.5f));
             ImGui::Image(ViewTexture(engine.Gpu()->ImageView(shaderPreview)), ImVec2(side, side));
-            ImGui::SetItemTooltip("%s", Tr("Surface preview: fixed time, white texture, no lighting or vertex displacement."));
+            ImGui::SetItemTooltip("%s", Tr(EditorShaderIsPost(ordered) ? "Post preview: the graph over a test picture, fixed time." :
+                                           "Surface preview: fixed time, white texture, no lighting or vertex displacement."));
         } else if (!validation.empty()) ImGui::TextWrapped("%s", validation.c_str());
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.5f, 0.42f, 1));
@@ -623,6 +708,21 @@ void NativeEditor::Impl::ShaderProperties() {
             ImGui::PopID();
         }
     }
+    if (EditorShaderIsPost(shaderDocument) && BeginProperties("##postprops")) {
+        PropertyLabel(Tr("Injection Point"));
+        const bool before = shaderDocument["injection"].asString() == "beforeToneMapping";
+        if (ImGui::BeginCombo("##injection", Tr(before ? "Before Tone Mapping" : "After Tone Mapping"))) {
+            for (int i = 0; i < 2; ++i) {
+                if (ImGui::Selectable(Tr(i == 0 ? "After Tone Mapping" : "Before Tone Mapping"), before == (i == 1))) {
+                    if (i == 0) shaderDocument.erase("injection");
+                    else shaderDocument["injection"] = "beforeToneMapping";
+                    ShaderRecord();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndTable();
+    }
     if (ImGui::CollapsingHeader(WithIcon(kIconBraces, Format("%s (%d / 8)###uniforms", Tr("Uniform Defaults"), static_cast<int>(shaderDocument["uniforms"].size()))).c_str())) {
         std::string remove;
         if (BeginProperties("##uniformprops")) {
@@ -652,7 +752,7 @@ void NativeEditor::Impl::ShaderProperties() {
         if (ImGui::Button(Tr("Add Uniform"))) { shaderDocument["uniforms"][shaderUniformName] = 1; ShaderRecord(); }
         ImGui::EndDisabled();
     }
-    if (ImGui::CollapsingHeader(WithIcon(kIconPalette, Tr("Material")).c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!EditorShaderIsPost(shaderDocument) && ImGui::CollapsingHeader(WithIcon(kIconPalette, Tr("Material")).c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         if (BeginProperties("##materialprops")) {
             float color[3] = {1, 1, 1};
             if (shaderMaterial["baseColor"].isArray()) for (int i = 0; i < 3; ++i) color[i] = shaderMaterial["baseColor"][i].asFloat(1);
@@ -707,8 +807,12 @@ void NativeEditor::Impl::ShadersPanel() {
     // Keep unsaved documents visible; switching documents has an explicit save/discard prompt.
     if (!ImGui::Begin(WithIcon(kIconWorkflow, TrId("Shader Graph")).c_str(), &showShaders)) { ImGui::End(); return; }
     shaderEditorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    if (ImGui::Button(WithIcon(kIconPlus, Tr("New Shader")).c_str())) OpenShader("");
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("New Shader")).c_str())) { shaderNewPost = false; OpenShader(""); }
     ShaderRect("new");
+    ImGui::SameLine();
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("New Post Shader")).c_str())) { shaderNewPost = true; OpenShader(""); }
+    ShaderRect("new-post");
+    ImGui::SetItemTooltip("%s", Tr("A full-screen effect for a camera's PostProcess (stage: post)"));
     if (shaderDocument.isNull()) {
         ImGui::TextWrapped("%s", Tr("Double-click a shader or material in Assets, or create a new shader."));
         ImGui::End(); return;
@@ -730,6 +834,18 @@ void NativeEditor::Impl::ShadersPanel() {
 
     Json ordered; std::string validation;
     bool valid = OrderEditorShaderGraph(shaderDocument, ordered, &validation);
+    const bool post = EditorShaderIsPost(shaderDocument);
+    if (post) {
+        // A post graph goes on a camera's PostProcess instead of a material.
+        const bool camera = selectedId != kNullEntity && selected["components"].has("PostProcess");
+        ImGui::BeginDisabled(!valid || !camera);
+        if (ImGui::Button(WithIcon(kIconCircleCheck, Tr("Apply to Selected Camera")).c_str()) && SaveShader())
+            Call("component.set", ObjectOf({{"id", Json(selectedId)}, {"type", "PostProcess"},
+                {"values", ObjectOf({{"shader", shaderPath}, {"shaderUniforms", Json::MakeObject()}})}}));
+        ShaderRect("apply-post");
+        ImGui::EndDisabled();
+        if (!camera) ImGui::SetItemTooltip("%s", Tr("Select an entity with a PostProcess first"));
+    } else {
     const std::string materialLabel = WithIcon(kIconPalette, Tr(shaderExistingMaterial == shaderMaterialPath ? "Save Material" : "Create Material"));
     const std::string applyLabel = WithIcon(kIconCircleCheck, Tr("Apply to Selected Mesh"));
     ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x - buttonWidth(materialLabel) - buttonWidth(applyLabel) - style.ItemSpacing.x * 2));
@@ -749,6 +865,7 @@ void NativeEditor::Impl::ShadersPanel() {
     ShaderRect("apply");
     ImGui::EndDisabled();
     if (!mesh) ImGui::SetItemTooltip("%s", Tr("Select an entity with a MeshRenderer first"));
+    }
 
     if (ImGui::Button(WithIcon(kIconPlus, Tr("Add Node")).c_str())) shaderPaletteAtMouse = true;
     ShaderRect("add");
@@ -786,7 +903,7 @@ void NativeEditor::Impl::ShadersPanel() {
     if (valid) {
         ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.55f, 1), "%s %s", kIconCircleCheck, Tr("No problems"));
         ImGui::SameLine();
-        ImGui::TextDisabled("%s", Format(Tr("%d / 48 nodes"), static_cast<int>(shaderDocument["nodes"].size())).c_str());
+        ImGui::TextDisabled("%s", Format(Tr("%d / %d nodes"), static_cast<int>(shaderDocument["nodes"].size()), EditorShaderMaxNodes()).c_str());
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.5f, 0.42f, 1));
         const std::string problem = std::string(kIconTriangleAlert) + " " + validation;

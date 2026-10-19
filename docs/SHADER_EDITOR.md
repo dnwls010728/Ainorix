@@ -28,7 +28,7 @@ material assets. No platform shader source or new renderer is required.
 5. Enter a `.shader.json` project path and **Save Shader** (Ctrl+S). The editor topologically
    sorts the nodes and remaps every argument/output, so connections may go in either
    direction in the workspace. All inputs must be connected and `color` must be assigned.
-   Engine validation also enforces the 48-node/8-uniform limits and vertex-stage restrictions.
+   Engine validation also enforces the 128-node/8-uniform limits and vertex-stage restrictions.
    An invalid graph cannot replace the last valid file. Graph undo/redo is local to the
    workspace (buttons or Ctrl+Z/Ctrl+Y) and does not undo scene edits.
 6. The toolbar has the shader file and **Save Shader** in its first row (amber with a `*` while there are unsaved
@@ -69,7 +69,28 @@ Automation finds the workspace's controls and cards through `NativeEditor::Shade
 `"arrange"`, `"save-material"`, `"node:<i>"`, `"out:<i>"`, `"in:<i>:<pin>"`, `"surface:color"`, `"palette:<op>"`, ...)
 instead of assuming where things are drawn.
 
+The Add Node list includes the math nodes `pow`, `smoothstep`, `noise`, `fbm` and `length`, the `ambient`, `viewDirection`
+and `objectPosition` inputs and the light-stage inputs `lightVector`, `lightColor` and `lightAttenuation`; the
+surface output node has a `Light` pin next to Color/Emissive/Normal/Offset (see [POSTPROCESS.md](POSTPROCESS.md#light-stage-custom-lighting)).
+
+### Post graphs
+
+**New Post Shader** starts a post graph (`"stage": "post"`, [POSTPROCESS.md](POSTPROCESS.md#post-graphs)), and opening
+a post `.shader.json` from Assets edits it in the same workspace. The output card is **Post Output** with Color only,
+the Add Node list offers the post inputs `sceneColor`, `sceneBlur` and `texel` instead of the surface ones, and
+the limit is 128 nodes. **Injection Point** in the graph properties chooses After Tone Mapping (the default, on
+the display image) or Before Tone Mapping (`"injection": "beforeToneMapping"`, on the HDR scene before bloom). The
+preview runs the graph over a built-in test picture (sky, ground, a lit ball, color
+bars) the way the software renderer runs it on the image. **Apply to Selected Camera** saves the graph and sets
+`PostProcess.shader` on the selected entity (it needs a PostProcess). Check:
+`oe editor <project> --screenshot shot.png --shader shaders/watercolor.shader.json --select "Main Camera"`.
+
+Post graphs expose **Injection Point** in their properties: **After Tone Mapping** preserves the display-image pass; **Before Tone Mapping** processes HDR scene color before bloom and the display conversion. The selection is part of the graph document and shares its undo and save.
+
 ## Status
 
 - [ ] Linux/EGL editor build and visual check of the Shaders workspace.
+- [x] Post graphs: post mode with its own nodes, a test-picture preview and Apply to Selected Camera (checked
+      with `oe editor --screenshot` on games/Kongal's watercolor graph).
+- [ ] Visual check of the new math nodes in the editor (`oe editor --screenshot`); not run in this change.
 

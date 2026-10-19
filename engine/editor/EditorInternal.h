@@ -270,6 +270,7 @@ struct NativeEditor::Impl {
     std::shared_ptr<const Texture> shaderPreview;
     std::string shaderPreviewKey;
     void OpenShader(const std::string& path, bool discard = false);
+    bool shaderNewPost = false;  // OpenShader("") starts a post graph (`"stage": "post"`)
     void ShadersPanel();
     void ShaderCanvas();
     void ShaderProperties();

@@ -16,16 +16,19 @@ namespace oe {
 //   normalTexture, normalScale, occlusionTexture, occlusionStrength,
 //   emissive, emissiveIntensity, emissiveTexture,
 //   alphaMode "opaque" | "mask" | "blend", alphaCutoff,
-//   doubleSided, unlit, pixelArt, tiling [x,y], offset [x,y]
+//   doubleSided, cull "back" | "front" | "none", castShadows, nextPass (another *.mat.json),
+//   unlit, pixelArt, tiling [x,y], offset [x,y], outlineWidth, outlineColor, outlineUnits "world" | "pixels"
 constexpr const char* kMaterialFormat = "ownengine.material";
 
 using TextureLoader = std::function<std::shared_ptr<const Texture>(const std::string& path, std::string* error)>;
 using ShaderLoader = std::function<std::shared_ptr<const ShaderGraph>(const std::string& path, std::string* error)>;
+using MaterialLoader = std::function<std::shared_ptr<const Material>(const std::string& path, std::string* error)>;
 
 // Reads a material description. Unknown fields and wrong types are errors
-// (with the field name); textures that fail to load are errors too.
+// (with the field name); textures that fail to load are errors too. `loadMaterial` resolves `nextPass`
+// (it reports cycles); without one a `nextPass` is an error.
 bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Material& out, std::string* error,
-                      const ShaderLoader& loadShader = {});
+                      const ShaderLoader& loadShader = {}, const MaterialLoader& loadMaterial = {});
 
 // The default material as JSON (every field), for new material files.
 Json DefaultMaterialJson();

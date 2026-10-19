@@ -52,6 +52,7 @@
 #include "render/GpuDevice.h"
 #include "render/GpuRenderer.h"
 #include "render/GraphSource.h"
+#include "render/ColorSpace.h"
 #include "render/PostProcess.h"
 #include "render/PlanarReflection.h"
 #include "render/Decals.h"
@@ -8454,6 +8455,202 @@ TEST(ShaderMaterialVaryingAlphaAndOcclusion) {
     }
 }
 
+TEST(ShaderGraphInterpreterAndLargeGraphs) {
+    // The GPU interpreter (packed instructions, four per vec4) runs a full 48-node graph whose last nodes read
+    // high registers in every argument like the compiled program and the CPU; a 100-node graph runs compiled,
+    // and the interpreter (compileGraphs off) draws it as its plain material.
+    auto graph = [](int nodes) {
+        // uv, a step, a start color, an add chain to node nodes - 3, uv * chain, mix(chain, start, uv * chain)
+        Json g = Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"constant","value":[0.005,0.01,0.015,0]},
+          {"op":"constant","value":[0.1,0.2,0.3,1]}]})J");
+        for (int i = 3; i < nodes - 2; ++i) {
+            Json node = Json::MakeObject();
+            node["op"] = "add";
+            node["args"] = Json(Json::Array{i - 1, 1});
+            g["nodes"].push(node);
+        }
+        Json product = Json::MakeObject(), mixed = Json::MakeObject();
+        product["op"] = "multiply";
+        product["args"] = Json(Json::Array{0, nodes - 3});
+        mixed["op"] = "mix";
+        mixed["args"] = Json(Json::Array{nodes - 3, 2, nodes - 2});
+        g["nodes"].push(product);
+        g["nodes"].push(mixed);
+        g["color"] = nodes - 1;
+        return g;
+    };
+    const int w = 128, h = 72;
+    auto mean = [&](const RenderTarget& a, const RenderTarget& b) {
+        double difference = 0;
+        for (size_t i = 0; i < a.color.size(); ++i) for (int shift : {0, 8, 16})
+            difference += std::abs(static_cast<int>((a.color[i] >> shift) & 255) - static_cast<int>((b.color[i] >> shift) & 255));
+        return difference / static_cast<double>(a.color.size() * 3);
+    };
+    RenderTarget cpu[2], gpu[2][2];  // [graph][interpreted]
+    for (bool interpreted : {false, true}) {
+        Engine e;
+        std::string error;
+        CHECK(e.Open(TempProject("graph_interpreter"), &error));
+        for (int nodes : {48, 100}) {
+            Json args = Json::MakeObject();
+            args["path"] = "g" + std::to_string(nodes) + ".shader.json";
+            args["graph"] = graph(nodes);
+            args["overwrite"] = true;
+            CHECK(e.Call("shader.create", args)["ok"].asBool());
+            Json material = Json::parse(R"J({"overwrite":true,"values":{"unlit":true,"pixelArt":true,"baseColor":[0.25,0.5,0.75]}})J");
+            material["path"] = "g" + std::to_string(nodes) + ".mat.json";
+            material["values"]["shader"] = args["path"];
+            CHECK(e.Call("material.create", material)["ok"].asBool());
+        }
+        e.SetGpuCompileGraphs(!interpreted);
+        if (!e.EnableGpu(nullptr, &error)) {
+            std::printf("  SKIP no GPU backend here (%s)\n", error.c_str());
+            return;
+        }
+        for (int g : {0, 1}) {
+            Call(e, "scene.new", R"J({"empty":true})J");
+            Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+              "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+            Json surface = Json::parse(R"J({"name":"Surface","components":{"Transform":{"scale":[4,4,1]},"MeshRenderer":{"color":[1,1,1]}}})J");
+            surface["components"]["MeshRenderer"]["material"] = g ? "g100.mat.json" : "g48.mat.json";
+            CHECK(e.Call("entity.create", surface)["ok"].asBool());
+            RenderView view;
+            MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+            cpu[g].Resize(w, h);
+            gpu[g][interpreted].Resize(w, h);
+            e.Renderer().Render(e.GetScene(), view, cpu[g]);
+            e.Gpu()->Render(e.GetScene(), view, gpu[g][interpreted]);
+        }
+    }
+    const uint32_t centre = cpu[0].color[36 * w + 64];
+    CHECK(((centre >> 16) & 0xFF) > 230);  // the graph's mix (blue 0.945 at the centre), not the material color
+    for (int g : {0, 1}) {
+        const double compiled = mean(cpu[g], gpu[g][0]);
+        if (compiled >= 2) std::printf("  %d-node graph: software/compiled GPU mean difference %.4f\n", g ? 100 : 48, compiled);
+        CHECK(compiled < 2);
+    }
+    const double interpreted = mean(cpu[0], gpu[0][1]);
+    if (interpreted >= 2) std::printf("  48-node graph: software/interpreted GPU mean difference %.4f\n", interpreted);
+    CHECK(interpreted < 2);
+    const uint32_t plain = gpu[1][1].color[36 * w + 64];
+    CHECK(std::abs(static_cast<int>(plain & 0xFF) - 64) <= 1 && std::abs(static_cast<int>((plain >> 8) & 0xFF) - 128) <= 1 &&
+          std::abs(static_cast<int>((plain >> 16) & 0xFF) - 191) <= 1);
+    CHECK(mean(cpu[1], gpu[1][1]) > 2);
+}
+
+TEST(ShaderGraphViewAndObjectInputs) {
+    // viewDirection (toward the camera; an orthographic camera's axis) and objectPosition (the mesh's own space)
+    // in the fragment and vertex stages, the same in both renderers; graphs reading objectPosition are not batched.
+    CHECK(ShaderViewDirection(Vec4(0, 0, 10, 0), Vec3(0, 0, 0)).z == 1);
+    const Vec4 side = ShaderViewDirection(Vec4(3, 0, 4, 0), Vec3(0, 0, 0));
+    CHECK(std::fabs(side.x - 0.6f) < 1e-6f && std::fabs(side.z - 0.8f) < 1e-6f && side.w == 0);
+    CHECK(ShaderViewDirection(Vec4(0, 1, 0, 1), Vec3(5, 5, 5)).y == 1);  // orthographic: the axis everywhere
+    CHECK(ShaderViewDirection(Vec4(1, 2, 3, 0), Vec3(1, 2, 3)).x == 0);  // at the camera: zero, never NaN
+    ShaderGraph parsed;
+    std::string error;
+    CHECK(!CompileShaderGraph(Json::parse(R"J({"stage":"post","nodes":[{"op":"viewDirection"}],"color":0})J"), parsed, &error));
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"viewDirection"}],"color":0})J"), parsed, &error) && !parsed.objectSpace);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"objectPosition"}],"color":0,"offset":0})J"), parsed, &error) && parsed.objectSpace);
+    CHECK(!EditorShaderOperationInStage("viewDirection", true) && EditorShaderOperationInStage("objectPosition", false));
+
+    Engine e;
+    CHECK(e.Open(TempProject("graph_view_object"), &error));
+    // color = input * 0.5 + 0.5 (alpha 1); the third graph moves vertices by objectPosition * 0.5 + viewDirection * 0.3
+    for (const char* input : {"viewDirection", "objectPosition"}) {
+        Json args = Json::MakeObject();
+        args["path"] = std::string(input) + ".shader.json";
+        args["graph"] = Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"constant","value":[0.5,0.5,0.5,0]},{"op":"multiply","args":[0,1]},
+          {"op":"constant","value":[0.5,0.5,0.5,1]},{"op":"add","args":[2,3]}],"color":4})J");
+        args["graph"]["nodes"][0]["op"] = input;
+        CHECK(e.Call("shader.create", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "shader.create", R"J({"path":"grow.shader.json","graph":{"nodes":[{"op":"objectPosition"},{"op":"constant","value":0.5},
+      {"op":"multiply","args":[0,1]},{"op":"viewDirection"},{"op":"constant","value":0.3},{"op":"multiply","args":[3,4]},
+      {"op":"add","args":[2,5]},{"op":"normal"},{"op":"constant","value":[0.5,0.5,0.5,0]},{"op":"multiply","args":[7,8]},
+      {"op":"constant","value":[0.5,0.5,0.5,1]},{"op":"add","args":[9,10]}],"color":11,"offset":6,"maxOffset":2}})J")["ok"].asBool());
+    for (const char* name : {"viewDirection", "objectPosition", "grow"}) {
+        Json material = Json::parse(R"J({"values":{"unlit":true}})J");
+        material["path"] = std::string(name) + ".mat.json";
+        material["values"]["shader"] = std::string(name) + ".shader.json";
+        CHECK(e.Call("material.create", material)["ok"].asBool());
+    }
+    if (!e.EnableGpu(nullptr, &error)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", error.c_str());
+        return;
+    }
+    const int w = 160, h = 90;
+    auto mean = [&](const RenderTarget& a, const RenderTarget& b) {
+        double difference = 0;
+        for (size_t i = 0; i < a.color.size(); ++i) for (int shift : {0, 8, 16})
+            difference += std::abs(static_cast<int>((a.color[i] >> shift) & 255) - static_cast<int>((b.color[i] >> shift) & 255));
+        return difference / static_cast<double>(a.color.size() * 3);
+    };
+    auto cube = [&](const char* material, float x, float y) {
+        Json entity = Json::parse(R"J({"name":"Cube","components":{"Transform":{"scale":[2,2,2]},"MeshRenderer":{"mesh":"cube","color":[1,1,1]}}})J");
+        entity["components"]["Transform"]["position"] = Json(Json::Array{x, y, 0});
+        entity["components"]["MeshRenderer"]["material"] = std::string(material) + ".mat.json";
+        CHECK(e.Call("entity.create", entity)["ok"].asBool());
+    };
+    auto render = [&](const char* camera, RenderTarget& cpu, RenderTarget& gpu) {
+        Call(e, "entity.create", camera);
+        RenderView view;
+        MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+        cpu.Resize(w, h);
+        gpu.Resize(w, h);
+        e.Renderer().Render(e.GetScene(), view, cpu);
+        return e.Gpu()->Render(e.GetScene(), view, gpu);
+    };
+    auto count = [&](const RenderTarget& target, int r, int g, int b, int tolerance) {
+        int pixels = 0;
+        for (uint32_t c : target.color)
+            pixels += std::abs(static_cast<int>(c & 255) - r) <= tolerance && std::abs(static_cast<int>((c >> 8) & 255) - g) <= tolerance &&
+                      std::abs(static_cast<int>((c >> 16) & 255) - b) <= tolerance;
+        return pixels;
+    };
+    // Perspective: two cubes of each graph, the objectPosition ones moved away (their colors do not change).
+    Call(e, "scene.new", R"J({"empty":true})J");
+    cube("viewDirection", -2.5f, 0);
+    cube("viewDirection", -2.5f, 2.5f);
+    cube("objectPosition", 2.5f, 0);
+    cube("objectPosition", 2.5f, 2.5f);
+    RenderTarget cpu, gpu;
+    const RenderStats stats = render(R"J({"name":"Camera","components":{"Transform":{"position":[0,0,12]},
+      "Camera":{"clearColor":[0,0,0]}}})J", cpu, gpu);
+    const double perspective = mean(cpu, gpu);
+    if (perspective >= 2) std::printf("  perspective software/GPU mean difference %.4f\n", perspective);
+    CHECK(perspective < 2);
+    // Front faces: objectPosition z = 0.5 at their centres (128, 128, 191) on both moved cubes; viewDirection leans
+    // toward the camera on the left cube (red above 128, blue near 255).
+    CHECK(count(cpu, 128, 128, 191, 6) >= 2 && count(gpu, 128, 128, 191, 6) >= 2);
+    CHECK(stats.drawCalls == 3);  // the viewDirection cubes batch, the objectPosition ones draw separately
+    // Orthographic: viewDirection is the camera axis everywhere, so the whole front face is (128, 128, 255).
+    Call(e, "scene.new", R"J({"empty":true})J");
+    cube("viewDirection", 0, 0);
+    render(R"J({"name":"Camera","components":{"Transform":{"position":[0,0,12]},
+      "Camera":{"projection":"orthographic","orthoSize":3,"clearColor":[0,0,0]}}})J", cpu, gpu);
+    const int face = count(cpu, 128, 128, 255, 1);
+    CHECK(face > 600 && count(gpu, 128, 128, 255, 1) > face * 9 / 10);
+    // Vertex stage: the cube grows by objectPosition and moves toward the camera.
+    auto covered = [](const RenderTarget& target) {
+        int pixels = 0;
+        for (uint32_t c : target.color) pixels += (c & 0xFFFFFF) != 0;
+        return pixels;
+    };
+    const char* perspectiveCamera = R"J({"name":"Camera","components":{"Transform":{"position":[0,0,12]},"Camera":{"clearColor":[0,0,0]}}})J";
+    Call(e, "scene.new", R"J({"empty":true})J");
+    cube("viewDirection", 0, 0);
+    render(perspectiveCamera, cpu, gpu);
+    const int plain = covered(cpu);
+    Call(e, "scene.new", R"J({"empty":true})J");
+    cube("grow", 0, 0);
+    render(perspectiveCamera, cpu, gpu);
+    const double grown = mean(cpu, gpu);
+    if (grown >= 2) std::printf("  vertex stage software/GPU mean difference %.4f\n", grown);
+    CHECK(grown < 2);
+    // objectPosition * 0.5 is +-0.25 added in world units: the 2-unit cube spans 2.5 (1.56 times the area) and comes nearer.
+    CHECK(covered(cpu) > plain * 3 / 2 && std::abs(covered(gpu) - covered(cpu)) < covered(cpu) / 20);
+}
+
 TEST(GraphSourcePatchesEveryBackend) {
     // Every operation, a uniform and both outputs: the generated code replaces the interpreter in the
     // mesh and surface programs of every backend sokol-shdc generated (compiled on the GPU elsewhere).
@@ -8806,6 +9003,736 @@ TEST(MeshRendererShaderUniforms) {
     CHECK(flagged);
     e.RenderGameView(again);
     CHECK(count(again, 0xFF00FF) == count(shot, 0x00FF00));
+}
+
+TEST(MaterialOutline) {
+    // outlineWidth/outlineColor draw an inverted hull: a ring of the outline color around the silhouette,
+    // never over the surface itself, without extra entities; both renderers agree.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("material_outline"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "material.create", R"J({"path":"toon.mat.json","values":{"unlit":true,
+      "outlineWidth":0.1,"outlineColor":[1,0,0]}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ball","components":{"MeshRenderer":{"mesh":"sphere","material":"toon.mat.json","color":[1,1,1]}}})J");
+    auto count = [](const RenderTarget& target, uint32_t rgb) {
+        int n = 0;
+        for (uint32_t color : target.color) n += (color & 0xFFFFFF) == rgb;
+        return n;
+    };
+    RenderTarget outlined, plain;
+    for (RenderTarget* target : {&outlined, &plain}) target->Resize(128, 72);
+    e.RenderGameView(outlined);
+    // Radius 0.5 m at 36 px per metre: the 0.1 m ring covers about 450 pixels.
+    CHECK(count(outlined, 0x0000FF) > 250);
+    // The draw list carries the shell after the surface: the engine graph, front faces culled.
+    const std::vector<RenderItem> items = GatherRenderItems(e.GetScene(), &e.Assets());
+    const std::vector<DrawCall> draws = BuildDrawList(items, Vec3(0, 0, 10));
+    CHECK(draws.size() == 2 && draws[0].pass == 0 && draws[1].pass == 1 && draws[1].material.cullFront &&
+          !draws[1].material.castShadows);
+    CHECK(draws.size() == 2 && draws[1].material.shader == OutlineShaderGraph() && draws[1].material.unlit);
+    CHECK(Call(e, "material.set", R"J({"path":"toon.mat.json","values":{"outlineWidth":0}})J")["ok"].asBool());
+    e.RenderGameView(plain);
+    CHECK(count(plain, 0x0000FF) == 0);
+    CHECK(count(plain, 0xFFFFFF) == count(outlined, 0xFFFFFF));  // the shell never covers the surface
+    // Widths are bounded like the outline graph's cull margin.
+    Json bad = Call(e, "material.set", R"J({"path":"toon.mat.json","values":{"outlineWidth":1}})J");
+    CHECK(!bad["ok"].asBool() && bad["error"]["code"].asString() == "invalid_material");
+    CHECK(Call(e, "material.set", R"J({"path":"toon.mat.json","values":{"outlineWidth":0.1}})J")["ok"].asBool());
+    e.RenderGameView(plain);
+    CHECK(plain.Hash() == outlined.Hash());
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(128, 72);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        const int softwareRing = count(outlined, 0x0000FF), gpuRing = count(gpu, 0x0000FF);
+        CHECK(gpuRing > softwareRing * 3 / 4 && gpuRing < softwareRing * 5 / 4);
+    } else std::printf("  SKIP outline GPU comparison (%s)\n", error.c_str());
+
+    // outlineUnits "pixels": the ring keeps its screen thickness when the (perspective) camera moves away;
+    // a world-unit ring gets thinner.
+    Json units = Call(e, "material.set", R"J({"path":"toon.mat.json","values":{"outlineUnits":"pixels","outlineWidth":20}})J");
+    CHECK(!units["ok"].asBool() && units["error"]["message"].asString().find("pixels") != std::string::npos);
+    CHECK(!Call(e, "material.set", R"J({"path":"toon.mat.json","values":{"outlineUnits":"inches"}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"Camera","values":{"projection":"perspective","fov":40}})J")["ok"].asBool());
+    auto ringAt = [&](float distance) {
+        // Red pixels along the middle row, left of the ball: the ring's thickness in pixels.
+        const std::string move = R"J({"id":"Camera","type":"Transform","values":{"position":[0,0,)J" + std::to_string(distance) + "]}}";
+        Call(e, "component.set", move.c_str());
+        RenderTarget shot;
+        shot.Resize(256, 144);
+        e.RenderGameView(shot);
+        int red = 0;
+        for (int x = 0; x < 128; ++x) red += (shot.color[static_cast<size_t>(72) * 256 + static_cast<size_t>(x)] & 0xFFFFFF) == 0x0000FF;
+        return red;
+    };
+    CHECK(Call(e, "material.set", R"J({"path":"toon.mat.json","values":{"outlineUnits":"pixels","outlineWidth":4}})J")["ok"].asBool());
+    const int nearPixels = ringAt(3), farPixels = ringAt(8);
+    CHECK(nearPixels >= 3 && nearPixels <= 6 && std::abs(nearPixels - farPixels) <= 1);
+    CHECK(Call(e, "material.set", R"J({"path":"toon.mat.json","values":{"outlineUnits":"world","outlineWidth":0.15}})J")["ok"].asBool());
+    CHECK(ringAt(3) > ringAt(8) + 2);
+
+    // The reserved screenSize and pixelScale uniforms reach graphs: color = screenSize.x / 1000, pixelScale.x * 100.
+    CHECK(Call(e, "shader.create", R"J({"path":"view.shader.json","graph":{"uniforms":{"screenSize":0,"pixelScale":0},
+      "nodes":[{"op":"uniform","name":"screenSize"},{"op":"uniform","name":"pixelScale"},
+               {"op":"constant","value":[0.001,100,0,0]},{"op":"swizzle","args":[0],"value":[0,0,0,0]},
+               {"op":"swizzle","args":[1],"value":[0,0,0,0]},{"op":"mix","args":[3,4,2]},
+               {"op":"multiply","args":[5,2]},{"op":"constant","value":[0,0,0,1]},{"op":"add","args":[6,7]}],"color":8}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"view.mat.json","values":{"unlit":true,"shader":"view.shader.json"}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Ball","type":"MeshRenderer","values":{"material":"view.mat.json"}})J")["ok"].asBool());
+    const GraphViewInputs inputs = MakeGraphViewInputs(Mat4::Perspective(Radians(40), 2, 0.1f, 100), 200, 100);
+    CHECK(std::fabs(inputs.screenSize.x - 200) < 1e-3f && std::fabs(inputs.screenSize.w - 0.01f) < 1e-5f);
+    CHECK(std::fabs(inputs.pixelScale.x - 2 * std::tan(Radians(20)) / 100) < 1e-5f && inputs.pixelScale.y == 0);
+    const GraphViewInputs ortho = MakeGraphViewInputs(Mat4::Orthographic(2, 2, 0.1f, 100), 200, 100);
+    CHECK(ortho.pixelScale.x == 0 && std::fabs(ortho.pixelScale.y - 0.04f) < 1e-5f);
+    const std::vector<RenderItem> viewItems = GatherRenderItems(e.GetScene(), &e.Assets());
+    const std::vector<DrawCall> viewDraws = BuildDrawList(viewItems, Vec3(0, 0, 3), nullptr, false, &inputs);
+    CHECK(!viewDraws.empty() && viewDraws[0].material.shader);
+    if (!viewDraws.empty() && viewDraws[0].material.shader) {
+        const ShaderGraph& graph = *viewDraws[0].material.shader;
+        CHECK(graph.screenUniform >= 0 && graph.pixelScaleUniform >= 0);
+        CHECK(viewDraws[0].material.shaderUniforms[static_cast<size_t>(graph.screenUniform)].x == 200);
+        CHECK(viewDraws[0].material.shaderUniforms[static_cast<size_t>(graph.pixelScaleUniform)].x == inputs.pixelScale.x);
+    }
+}
+
+TEST(MaterialPassesAndCull) {
+    // Material cull/castShadows/nextPass: an outline written by hand as a nextPass material (cull front, a pixel
+    // offset graph) draws the same ring as the built-in outlineWidth; cycles are refused; passes cast no
+    // shadow; editing a nextPass file reloads the material that holds it.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("material_passes"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ball","components":{"MeshRenderer":{"mesh":"sphere","material":"ball.mat.json","color":[1,1,1]}}})J");
+    auto count = [](const RenderTarget& target, uint32_t rgb) {
+        int n = 0;
+        for (uint32_t color : target.color) n += (color & 0xFFFFFF) == rgb;
+        return n;
+    };
+    // The built-in outline, 4 pixels red.
+    CHECK(Call(e, "material.create", R"J({"path":"ball.mat.json","values":{"unlit":true,
+      "outlineWidth":4,"outlineUnits":"pixels","outlineColor":[1,0,0]}})J")["ok"].asBool());
+    RenderTarget builtin, manual;
+    for (RenderTarget* target : {&builtin, &manual}) target->Resize(128, 72);
+    e.RenderGameView(builtin);
+    CHECK(count(builtin, 0x0000FF) > 100);
+    // The same shell as a project material: normal * width * pixel size, cull front, no shadow.
+    CHECK(Call(e, "shader.create", R"J({"path":"shell.shader.json","graph":{
+      "uniforms":{"width":4,"color":[1,0,0,1],"cameraPosition":[0,0,0,1],"pixelScale":[0,0,0,0]},
+      "nodes":[{"op":"normal"},{"op":"position"},{"op":"uniform","name":"cameraPosition"},{"op":"subtract","args":[1,2]},
+               {"op":"length","args":[3]},{"op":"uniform","name":"pixelScale"},{"op":"swizzle","args":[5],"value":[0,0,0,0]},
+               {"op":"multiply","args":[4,6]},{"op":"swizzle","args":[5],"value":[1,1,1,1]},{"op":"add","args":[7,8]},
+               {"op":"uniform","name":"width"},{"op":"multiply","args":[9,10]},{"op":"multiply","args":[0,11]},
+               {"op":"uniform","name":"color"}],"color":13,"offset":12,"maxOffset":2}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"shell.mat.json","values":{"unlit":true,"cull":"front","castShadows":false,"smoothNormals":true,
+      "shader":"shell.shader.json"}})J")["ok"].asBool());
+    CHECK(Call(e, "material.set", R"J({"path":"ball.mat.json","values":{"outlineWidth":0,"nextPass":"shell.mat.json"}})J")["ok"].asBool());
+    e.RenderGameView(manual);
+    CHECK(manual.Hash() == builtin.Hash());
+    const std::vector<RenderItem> items = GatherRenderItems(e.GetScene(), &e.Assets());
+    const std::vector<DrawCall> draws = BuildDrawList(items, Vec3(0, 0, 10));
+    CHECK(draws.size() == 2 && draws[1].pass == 1 && draws[1].material.cullFront && !draws[1].material.castShadows);
+    // Cycles are refused with the chain in the message (a material naming itself, or a -> b -> a).
+    Json self = Call(e, "material.set", R"J({"path":"ball.mat.json","values":{"nextPass":"ball.mat.json"}})J");
+    CHECK(!self["ok"].asBool() && self["error"]["message"].asString().find("cycle") != std::string::npos);
+    Json loop = Call(e, "material.set", R"J({"path":"shell.mat.json","values":{"nextPass":"ball.mat.json"}})J");
+    CHECK(!loop["ok"].asBool() && loop["error"]["message"].asString().find("cycle") != std::string::npos);
+    Json bad = Call(e, "material.set", R"J({"path":"shell.mat.json","values":{"cull":"sideways"}})J");
+    CHECK(!bad["ok"].asBool());
+    // Editing the pass file shows at once on the material that holds it (here: a green shell).
+    CHECK(Call(e, "material.set", R"J({"path":"shell.mat.json","values":{"shaderUniforms":{"color":[0,1,0,1]}}})J")["ok"].asBool());
+    e.RenderGameView(manual);
+    CHECK(count(manual, 0x0000FF) == 0 && count(manual, 0x00FF00) == count(builtin, 0x0000FF));
+    // castShadows false keeps a surface out of the shadow map: a lit floor under an unlit ball stays fully lit.
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-90,0,0]},"DirectionalLight":{"shadows":true,"shadowStrength":1}}})J");
+    Call(e, "entity.create", R"J({"name":"Floor","components":{"Transform":{"position":[0,0,-2],"rotation":[90,0,0],"scale":[6,1,6]},
+      "MeshRenderer":{"mesh":"plane","color":[1,1,1]}}})J");
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"Transform","values":{"position":[0,6,0],"rotation":[-90,0,0]}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Floor","type":"Transform","values":{"position":[0,0,0],"rotation":[0,0,0]}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Ball","type":"Transform","values":{"position":[0,1,0]}})J")["ok"].asBool());
+    CHECK(Call(e, "material.set", R"J({"path":"ball.mat.json","values":{"nextPass":"","unlit":false,"castShadows":false}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Sun","type":"Transform","values":{"rotation":[-50,30,0]}})J")["ok"].asBool());
+    RenderTarget shadowed, unshadowed;
+    for (RenderTarget* target : {&shadowed, &unshadowed}) target->Resize(128, 72);
+    e.RenderGameView(unshadowed);
+    CHECK(Call(e, "material.set", R"J({"path":"ball.mat.json","values":{"castShadows":true}})J")["ok"].asBool());
+    e.RenderGameView(shadowed);
+    auto luma = [](uint32_t c) { return static_cast<int>(c & 255) + static_cast<int>((c >> 8) & 255) + static_cast<int>((c >> 16) & 255); };
+    int darker = 0;
+    for (size_t i = 0; i < shadowed.color.size(); ++i) darker += luma(shadowed.color[i]) + 30 < luma(unshadowed.color[i]);
+    CHECK(darker > 50);  // a slanted sun: the shadow appears only when the ball's material casts it
+}
+
+TEST(MaterialSmoothNormals) {
+    // A cube's corners have three vertices with three normals; smoothed they share the diagonal, so an outline
+    // shell pushed out along them stays closed (the built-in outline) instead of splitting into six faces.
+    const Mesh* cube = GetBuiltinMesh("cube");
+    CHECK(cube != nullptr);
+    if (cube) {
+        const std::vector<Vec3> smooth = cube->SmoothNormals();
+        CHECK(smooth.size() == cube->positions.size());
+        bool diagonal = true;
+        for (size_t i = 0; i < smooth.size(); ++i) {
+            const Vec3 expected = Normalize(cube->positions[i]);
+            diagonal = diagonal && Length(smooth[i] - expected) < 1e-4f;
+        }
+        CHECK(diagonal);
+    }
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("material_smooth_normals"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0,0,0]}}})J");
+    CHECK(Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{"rotation":[30,45,0]},
+      "MeshRenderer":{"mesh":"cube","material":"box.mat.json","color":[1,1,1]}}})J")["ok"].asBool());
+    auto count = [](const RenderTarget& target, uint32_t rgb) {
+        int n = 0;
+        for (uint32_t color : target.color) n += (color & 0xFFFFFF) == rgb;
+        return n;
+    };
+    // The same world-unit shell as a nextPass material, with the split normals and smoothed.
+    CHECK(Call(e, "shader.create", R"J({"path":"shell.shader.json","graph":{"uniforms":{"width":0.12},
+      "nodes":[{"op":"normal"},{"op":"uniform","name":"width"},{"op":"multiply","args":[0,1]},{"op":"constant","value":[1,0,0,1]}],
+      "color":3,"offset":2,"maxOffset":0.25}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"shell.mat.json","values":{"unlit":true,"cull":"front","castShadows":false,
+      "shader":"shell.shader.json"}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"box.mat.json","values":{"unlit":true,"nextPass":"shell.mat.json"}})J")["ok"].asBool());
+    RenderTarget split, closed, builtin;
+    for (RenderTarget* target : {&split, &closed, &builtin}) target->Resize(128, 96);
+    e.RenderGameView(split);
+    CHECK(Call(e, "material.set", R"J({"path":"shell.mat.json","values":{"smoothNormals":true}})J")["ok"].asBool());
+    e.RenderGameView(closed);
+    // Split shells leave background gaps at the corners: the closed one covers more.
+    CHECK(count(split, 0x0000FF) > 100 && count(closed, 0x0000FF) > count(split, 0x0000FF) + 20);
+    CHECK(count(closed, 0xFFFFFF) == count(split, 0xFFFFFF));  // the shell never covers the surface
+    // The built-in outline smooths its normals.
+    CHECK(Call(e, "material.set", R"J({"path":"box.mat.json","values":{"nextPass":"","outlineWidth":0.12,"outlineColor":[1,0,0]}})J")["ok"].asBool());
+    e.RenderGameView(builtin);
+    CHECK(builtin.Hash() == closed.Hash());
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 96, view);
+    if (e.EnableGpu(nullptr, &error)) {
+        // The GPU smooths the same way (its anti-aliased edges leave fewer exactly red pixels).
+        RenderTarget gpu, gpuSplit;
+        for (RenderTarget* target : {&gpu, &gpuSplit}) target->Resize(128, 96);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        CHECK(Call(e, "material.set", R"J({"path":"shell.mat.json","values":{"smoothNormals":false}})J")["ok"].asBool());
+        CHECK(Call(e, "material.set", R"J({"path":"box.mat.json","values":{"nextPass":"shell.mat.json","outlineWidth":0}})J")["ok"].asBool());
+        e.Gpu()->Render(e.GetScene(), view, gpuSplit);
+        const int softwareRing = count(builtin, 0x0000FF), gpuRing = count(gpu, 0x0000FF);
+        CHECK(gpuRing > softwareRing * 3 / 4 && gpuRing < softwareRing * 5 / 4);
+        CHECK(gpuRing > count(gpuSplit, 0x0000FF) + 20);
+    } else std::printf("  SKIP smooth normals GPU comparison (%s)\n", error.c_str());
+}
+
+TEST(LinearColorSpace) {
+    // project.json "rendering": {"colorSpace": "linear"}: authored colors and color textures are decoded, lighting
+    // adds linear light, the image is encoded back. Unlit colors and textures come out as authored; a white surface
+    // lit by a white light shows the same lighting value encoded (LinearToSrgb of the gamma image), on both renderers.
+    struct Shot { RenderTarget software, gpu; bool hasGpu = false; };
+    auto shoot = [](const char* colorSpace, Shot& shot) {
+        Engine e;
+        std::string error;
+        const std::string project = TempProject("linear_color_space");
+        Json config = Json::parse(R"({"format":"ownengine.project","version":1,"name":"Linear"})");
+        config["rendering"]["colorSpace"] = colorSpace;
+        CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump()));
+        if (!e.Open(project, &error)) { std::printf("  open: %s\n", error.c_str()); return false; }
+        CHECK(e.Assets().LinearColor() == (std::string(colorSpace) == "linear"));
+        Call(e, "scene.new", R"J({"empty":true})J");
+        Image gray;
+        gray.width = gray.height = 2;
+        gray.rgba.assign(16, 128);
+        for (size_t i = 3; i < gray.rgba.size(); i += 4) gray.rgba[i] = 255;
+        CHECK(WritePng(JoinPath(project, "gray.png"), gray, true));
+        CHECK(Call(e, "material.create", R"J({"path":"unlit.mat.json","values":{"unlit":true,"baseColor":[0.5,0.25,0.75]}})J")["ok"].asBool());
+        CHECK(Call(e, "material.create", R"J({"path":"textured.mat.json","values":{"unlit":true,"baseTexture":"gray.png"}})J")["ok"].asBool());
+        CHECK(Call(e, "material.create", R"J({"path":"lit.mat.json","values":{"baseColor":[1,1,1],"roughness":1}})J")["ok"].asBool());
+        CHECK(Call(e, "material.create", R"J({"path":"white.mat.json","values":{"unlit":true,"baseColor":[1,1,1]}})J")["ok"].asBool());
+        // A glTF quad whose COLOR_0 is 0.5: linear by the glTF specification, so it is not decoded again.
+        std::vector<uint8_t> bin;
+        auto putF = [&](float f) { uint8_t b[4]; std::memcpy(b, &f, 4); bin.insert(bin.end(), b, b + 4); };
+        for (float v : {-0.5f, -0.5f, 0.f, 0.5f, -0.5f, 0.f, 0.5f, 0.5f, 0.f, -0.5f, 0.5f, 0.f}) putF(v);  // positions (48 bytes)
+        for (int i = 0; i < 4; ++i) for (float v : {0.5f, 0.5f, 0.5f, 1.f}) putF(v);                    // COLOR_0 (64 bytes)
+        for (int i : {0, 1, 2, 0, 2, 3}) { bin.push_back(static_cast<uint8_t>(i)); bin.push_back(0); }  // indices (12 bytes)
+        const std::string gltf = std::string(R"J({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
+          "meshes":[{"primitives":[{"attributes":{"POSITION":0,"COLOR_0":1},"indices":2}]}],
+          "buffers":[{"byteLength":124,"uri":"data:application/octet-stream;base64,)J") + Base64Encode(bin) + R"J("}],
+          "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":48},{"buffer":0,"byteOffset":48,"byteLength":64},{"buffer":0,"byteOffset":112,"byteLength":12}],
+          "accessors":[{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[-0.5,-0.5,0],"max":[0.5,0.5,0]},
+                       {"bufferView":1,"componentType":5126,"count":4,"type":"VEC4"},
+                       {"bufferView":2,"componentType":5123,"count":6,"type":"SCALAR"}]})J";
+        CHECK(WriteTextFile(JoinPath(project, "painted.gltf"), gltf));
+        const auto painted = e.Assets().GetMesh("painted.gltf", &error);
+        CHECK(painted && painted->linearColors && painted->colors.size() == 4);
+        Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+          "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0.5,0.5,0.5]}}})J");
+        Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[0,60,0]},
+          "DirectionalLight":{"color":[1,1,1],"intensity":1,"ambient":[0,0,0]}}})J");
+        for (const char* entity : {
+                 R"J({"name":"Unlit","components":{"Transform":{"position":[-1.2,0,0],"rotation":[90,0,0],"scale":[1,1,1]},"MeshRenderer":{"mesh":"plane","material":"unlit.mat.json","color":[1,1,1],"castShadows":false}}})J",
+                 R"J({"name":"Textured","components":{"Transform":{"position":[0,0,0],"rotation":[90,0,0],"scale":[1,1,1]},"MeshRenderer":{"mesh":"plane","material":"textured.mat.json","color":[1,1,1],"castShadows":false}}})J",
+                 R"J({"name":"Lit","components":{"Transform":{"position":[1.2,0,0],"rotation":[90,0,0],"scale":[1,1,1]},"MeshRenderer":{"mesh":"plane","material":"lit.mat.json","color":[1,1,1],"castShadows":false}}})J",
+                 R"J({"name":"Painted","components":{"Transform":{"position":[-2.4,0,0]},"MeshRenderer":{"mesh":"painted.gltf","material":"white.mat.json","color":[1,1,1],"castShadows":false}}})J"})
+            CHECK(Call(e, "entity.create", entity)["ok"].asBool());
+        shot.software.Resize(192, 64);
+        e.RenderGameView(shot.software);
+        RenderView view;
+        MakeSceneView(e.GetScene(), 3.0f, view);
+        if (e.EnableGpu(nullptr, &error)) {
+            shot.gpu.Resize(192, 64);
+            e.Gpu()->Render(e.GetScene(), view, shot.gpu);
+            shot.hasGpu = true;
+        } else std::printf("  SKIP linear color space GPU (%s)\n", error.c_str());
+        return true;
+    };
+    Shot gamma, linear;
+    CHECK(shoot("gamma", gamma) && shoot("linear", linear));
+    auto channel = [](const RenderTarget& t, int x, int y, int ch) {
+        return static_cast<int>((t.color[static_cast<size_t>(y) * static_cast<size_t>(t.width) + static_cast<size_t>(x)] >> (8 * ch)) & 0xFF);
+    };
+    const int unlitX = 96 - 38, textureX = 96, litX = 96 + 38, y = 32;
+    for (const RenderTarget* t : {&linear.software, &linear.gpu}) {
+        if (t == &linear.gpu && !linear.hasGpu) continue;
+        // Unlit: the authored color and the texture survive the decode and encode.
+        CHECK(std::abs(channel(*t, unlitX, y, 0) - 128) <= 2 && std::abs(channel(*t, unlitX, y, 1) - 64) <= 2 &&
+              std::abs(channel(*t, unlitX, y, 2) - 191) <= 2);
+        CHECK(std::abs(channel(*t, textureX, y, 0) - 128) <= 2);
+        CHECK(std::abs(channel(*t, 2, 2, 0) - 128) <= 2);  // the clear color too
+        // glTF vertex colors are linear: 0.5 shows as LinearToSrgb(0.5) = 188, not decoded and encoded back to 128.
+        CHECK(std::abs(channel(*t, 96 - 77, y, 0) - 188) <= 2);
+        // Lit white: the gamma image's lighting value, encoded.
+        const float lighting = static_cast<float>(channel(gamma.software, litX, y, 0)) / 255.0f;
+        const int expected = static_cast<int>(LinearToSrgb(lighting) * 255.0f + 0.5f);
+        std::printf("  lit gamma %d linear %d expected %d\n", channel(gamma.software, litX, y, 0), channel(*t, litX, y, 0), expected);
+        CHECK(lighting > 0.2f && lighting < 0.8f && std::abs(channel(*t, litX, y, 0) - expected) <= 3);
+    }
+    // The gamma project is the plain path: the lit value is the lighting number itself.
+    CHECK(std::abs(channel(gamma.software, unlitX, y, 0) - 128) <= 1);
+    CHECK(std::abs(channel(gamma.software, 96 - 77, y, 0) - 128) <= 1);  // the vertex color number as stored
+    // Bad values are refused when the project opens.
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("linear_color_space_bad");
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), R"({"format":"ownengine.project","version":1,"name":"Bad","rendering":{"colorSpace":"aces"}})"));
+    CHECK(!e.Open(project, &error) && error.find("colorSpace") != std::string::npos);
+}
+
+TEST(LinearColorTextures) {
+    // Color textures of a linear project are decoded per texel before filtering (GPU: SRGB8A8 textures, mips averaged
+    // in linear light; CPU: Texture::Sample with decode), and <image>.texture.json {"sRGB": false} marks a data image.
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("linear_color_textures");
+    CHECK(WriteTextFile(JoinPath(project, "project.json"),
+                        R"({"format":"ownengine.project","version":1,"name":"Linear","rendering":{"colorSpace":"linear"}})"));
+    CHECK(e.Open(project, &error));
+    Image stripes;  // black | white: halfway between them is 50% linear light, sRGB 188 (the old decode-after-filter gave 128)
+    stripes.width = 2;
+    stripes.height = 1;
+    stripes.rgba = {0, 0, 0, 255, 255, 255, 255, 255};
+    CHECK(WritePng(JoinPath(project, "stripes.png"), stripes, true));
+    Image gray;  // 128 as data: 0.5 used as linear light, shown as 188; as a color image it would show 128
+    gray.width = gray.height = 2;
+    gray.rgba.assign(16, 128);
+    for (size_t i = 3; i < gray.rgba.size(); i += 4) gray.rgba[i] = 255;
+    CHECK(WritePng(JoinPath(project, "flow.png"), gray, true));
+    CHECK(WriteTextFile(JoinPath(project, "flow.png.texture.json"), R"({"sRGB": false})"));
+    Image checker;  // one-texel checker seen from far away: GPU mips average it as linear light (188)
+    checker.width = checker.height = 64;
+    checker.rgba.resize(64 * 64 * 4);
+    for (int y = 0; y < 64; ++y) for (int x = 0; x < 64; ++x) {
+        const uint8_t v = (x + y) % 2 ? 255 : 0;
+        for (int c = 0; c < 4; ++c) checker.rgba[static_cast<size_t>((y * 64 + x) * 4 + c)] = c == 3 ? 255 : v;
+    }
+    CHECK(WritePng(JoinPath(project, "checker.png"), checker, true));
+    const auto flow = e.Assets().GetTexture("flow.png", &error);
+    const auto striped = e.Assets().GetTexture("stripes.png", &error);
+    CHECK(flow && !flow->srgb && striped && striped->srgb);
+    CHECK(striped && std::abs(striped->Sample(0.5f, 0.5f, false, nullptr, true).r - 0.5f) < 0.01f &&
+          std::abs(striped->Sample(0.5f, 0.5f).r - 0.5f) < 0.01f);  // decoded blend vs stored blend (both 0.5 here)
+    CHECK(striped && std::abs(striped->Sample(0.375f, 0.5f, false, nullptr, true).r - 0.25f) < 0.01f);  // 1/4 white
+    Call(e, "scene.new", R"J({"empty":true})J");
+    for (const char* name : {"stripes", "flow", "checker"}) {
+        Json material = Json::parse(R"J({"values":{"unlit":true,"baseColor":[1,1,1]}})J");
+        material["path"] = std::string(name) + ".mat.json";
+        material["values"]["baseTexture"] = std::string(name) + ".png";
+        CHECK(e.Call("material.create", material)["ok"].asBool());
+    }
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0,0,0]}}})J");
+    for (const char* entity : {
+             R"J({"name":"Stripes","components":{"Transform":{"position":[-1.2,0,0],"rotation":[90,0,0]},"MeshRenderer":{"mesh":"plane","material":"stripes.mat.json","color":[1,1,1]}}})J",
+             R"J({"name":"Flow","components":{"Transform":{"rotation":[90,0,0]},"MeshRenderer":{"mesh":"plane","material":"flow.mat.json","color":[1,1,1]}}})J",
+             R"J({"name":"Checker","components":{"Transform":{"position":[1.2,0,0],"rotation":[90,0,0],"scale":[0.25,0.25,0.25]},"MeshRenderer":{"mesh":"plane","material":"checker.mat.json","color":[1,1,1]}}})J"})
+        CHECK(Call(e, "entity.create", entity)["ok"].asBool());
+    RenderView view;
+    MakeSceneView(e.GetScene(), 3.0f, view);
+    RenderTarget cpu;
+    cpu.Resize(192, 64);
+    e.Renderer().Render(e.GetScene(), view, cpu);
+    auto red = [](const RenderTarget& t, int x, int y) { return static_cast<int>(t.color[static_cast<size_t>(y * t.width + x)] & 0xFF); };
+    // The stripes pixel sits 0.9 pixel right of the quad centre (white weight 0.556): 196; decoding after filtering
+    // gave 142.
+    CHECK(std::abs(red(cpu, 96 - 38, 32) - 196) <= 3 && std::abs(red(cpu, 96, 32) - 188) <= 2);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(192, 64);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        CHECK(std::abs(red(gpu, 96 - 38, 32) - 196) <= 3 && std::abs(red(gpu, 96, 32) - 188) <= 2);
+        CHECK(std::abs(red(gpu, 96 + 38, 32) - 188) <= 8);
+    } else std::printf("  SKIP linear color textures GPU (%s)\n", error.c_str());
+    // The sidecar is an import setting: changing it reloads the image; a malformed one is refused.
+    CHECK(WriteTextFile(JoinPath(project, "stripes.png.texture.json"), R"({"sRGB": false})"));
+    const std::vector<std::string> changed = e.Assets().PollChanges();
+    CHECK(std::find(changed.begin(), changed.end(), "stripes.png") != changed.end());
+    const auto reloaded = e.Assets().GetTexture("stripes.png", &error);
+    CHECK(reloaded && !reloaded->srgb);
+    CHECK(WriteTextFile(JoinPath(project, "checker.png.texture.json"), R"({"sRGB": "no"})"));
+    e.Assets().PollChanges();
+    CHECK(!e.Assets().GetTexture("checker.png", &error) && error.find("texture.json") != std::string::npos);
+}
+
+TEST(MaterialLightGraph) {
+    // A surface graph with a `light` output shades the surface itself (Godot's light()): `color` once plus the light
+    // stage for every light, with lightVector/lightColor/lightAttenuation (shadows included); `ambient` is the
+    // scene's ambient light. Both renderers agree; light inputs feed only the light output.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("light_graph"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Json bad = Call(e, "shader.create", R"J({"path":"bad.shader.json","graph":{"nodes":[{"op":"lightVector"}],"color":0}})J");
+    CHECK(!bad["ok"].asBool() && bad["error"]["message"].asString().find("light input") != std::string::npos);
+    bad = Call(e, "shader.create", R"J({"path":"bad.shader.json","graph":{"nodes":[{"op":"ambient"},{"op":"constant","value":1}],
+      "color":1,"offset":0}})J");
+    CHECK(!bad["ok"].asBool());
+    bad = Call(e, "shader.create", R"J({"path":"bad.shader.json","graph":{"stage":"post","nodes":[{"op":"uv"}],"color":0,"light":0}})J");
+    CHECK(!bad["ok"].asBool());
+    // Lambert written as a graph: color = base * ambient, light = base * lightColor * max(N.L, 0) * attenuation.
+    CHECK(Call(e, "shader.create", R"J({"path":"lambert.shader.json","graph":{
+      "nodes":[{"op":"baseColor"},{"op":"ambient"},{"op":"multiply","args":[0,1]},
+               {"op":"normal"},{"op":"lightVector"},{"op":"dot","args":[3,4]},{"op":"constant","value":0},{"op":"max","args":[5,6]},
+               {"op":"lightColor"},{"op":"lightAttenuation"},{"op":"multiply","args":[7,9]},{"op":"multiply","args":[8,10]},
+               {"op":"multiply","args":[0,11]}],"color":2,"light":12}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"lambert.mat.json","values":{"shader":"lambert.shader.json"}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,8,0],"rotation":[-90,0,0]},
+      "Camera":{"projection":"orthographic","orthoSize":3,"clearColor":[0,0,0]}}})J");
+    CHECK(Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-60,0,0]},
+      "DirectionalLight":{"color":[1,1,1],"intensity":0.6,"ambient":[0.2,0.25,0.3],"shadows":true,"shadowStrength":1}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Floor","components":{"Transform":{"scale":[8,1,8]},
+      "MeshRenderer":{"mesh":"plane","material":"lambert.mat.json","color":[1,1,1]}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Post","components":{"Transform":{"position":[0,1,0],"scale":[0.6,2,0.6]},
+      "MeshRenderer":{"mesh":"cube","material":"lambert.mat.json","color":[1,1,1]}}})J")["ok"].asBool());
+    RenderTarget shot;
+    shot.Resize(160, 160);
+    e.RenderGameView(shot);
+    auto at = [&](const RenderTarget& t, float wx, float wz) {  // floor point -> pixel of the top-down orthographic view
+        const int x = static_cast<int>((wx / 3 * 0.5f + 0.5f) * 160), y = static_cast<int>((wz / 3 * 0.5f + 0.5f) * 160);
+        return t.color[static_cast<size_t>(y) * 160 + static_cast<size_t>(x)];
+    };
+    auto channel = [](uint32_t c, int shift) { return static_cast<int>((c >> shift) & 255); };
+    // The sun travels down and toward -Z (rotation -60 about X): the post shades the floor on its -Z side.
+    const uint32_t lit = at(shot, 0, 2.0f), shadow = at(shot, 0, -1.2f);
+    CHECK(channel(shadow, 0) + 20 < channel(lit, 0));
+    // In shadow only `color` is left: base * ambient, the scene ambient through the ambient input.
+    CHECK(std::abs(channel(shadow, 0) - 51) <= 3 && std::abs(channel(shadow, 8) - 64) <= 3 && std::abs(channel(shadow, 16) - 77) <= 3);
+    // A point light adds through the light stage too.
+    CHECK(Call(e, "entity.create", R"J({"name":"Lamp","components":{"Transform":{"position":[2,0.5,-2]},"PointLight":{"color":[1,0,0],"intensity":2,"range":2}}})J")["ok"].asBool());
+    RenderTarget lamp;
+    lamp.Resize(160, 160);
+    e.RenderGameView(lamp);
+    CHECK(channel(at(lamp, 2, -2), 0) > channel(at(shot, 2, -2), 0) + 40 && channel(at(lamp, 2, -2), 8) == channel(at(shot, 2, -2), 8));
+    RenderView view;
+    MakeSceneView(e.GetScene(), 1.0f, view);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(160, 160);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double difference = 0;
+        for (size_t i = 0; i < lamp.color.size(); ++i) for (int shift : {0, 8, 16})
+            difference += std::abs(channel(lamp.color[i], shift) - channel(gpu.color[i], shift));
+        CHECK(difference / static_cast<double>(lamp.color.size() * 3) < 3);
+    } else std::printf("  SKIP light graph GPU comparison (%s)\n", error.c_str());
+}
+
+TEST(PostProcessGraphInjection) {
+    // "injection": "beforeToneMapping" runs a post graph on the HDR scene (values above 1, linear light in a linear
+    // project) before bloom, exposure, tone mapping and the encode; the default afterToneMapping keeps today's image.
+    // Reinhard maps the card's 4 to 4/5, so a graph halving sceneColor shows 2/3 before and 2/5 after tone mapping.
+    ShaderGraph compiled;
+    std::string error;
+    Json definition = Json::parse(R"({"stage":"post","nodes":[{"op":"constant","value":2}],"color":0})");
+    CHECK(CompileShaderGraph(definition, compiled, &error) && !compiled.beforeToneMapping);
+    for (const Json& value : {Json("invalid"), Json(1), Json(), Json(true)}) {
+        definition["injection"] = value;
+        CHECK(!CompileShaderGraph(definition, compiled, &error) && error.find("injection") != std::string::npos);
+    }
+    definition["injection"] = "beforeToneMapping";
+    CHECK(CompileShaderGraph(definition, compiled, &error) && compiled.beforeToneMapping);
+    definition["stage"] = "surface";
+    CHECK(!CompileShaderGraph(definition, compiled, &error) && error.find("injection") != std::string::npos);
+    definition["injection"] = "afterToneMapping";
+    CHECK(!CompileShaderGraph(definition, compiled, &error) && error.find("injection") != std::string::npos);
+
+    for (bool compile : {true, false}) for (const char* space : {"gamma", "linear"}) {
+        Engine e;
+        const std::string project = TempProject((std::string("post_injection_") + space).c_str());
+        Json config = Json::parse(R"({"format":"ownengine.project","version":1,"name":"Injection"})");
+        config["rendering"]["colorSpace"] = space;
+        CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump()));
+        CHECK(e.Open(project, &error));
+        CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+        CHECK(Call(e, "entity.create", R"({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+          "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0,0,0]},
+          "PostProcess":{"toneMapping":"reinhard"}}})")["ok"].asBool());
+        CHECK(Call(e, "material.create", R"({"path":"bright.mat.json","values":{"baseColor":[0,0,0],"unlit":true,
+          "emissive":[1,1,1],"emissiveIntensity":4}})")["ok"].asBool());
+        CHECK(Call(e, "entity.create", R"({"name":"Card","components":{"MeshRenderer":{"mesh":"quad","material":"bright.mat.json"}}})")["ok"].asBool());
+        e.SetGpuCompileGraphs(compile);
+        const bool gpuAvailable = e.EnableGpu(nullptr, &error);
+        if (!gpuAvailable) std::printf("  SKIP injection GPU comparison (%s)\n", error.c_str());
+        RenderTarget shot, gpu, defaultShot;
+        for (RenderTarget* target : {&shot, &gpu, &defaultShot}) target->Resize(96, 64);
+        auto channel = [](uint32_t c, int shift) { return static_cast<int>((c >> shift) & 255); };
+        auto expected = [&](float value) {
+            const float mapped = value / (1 + value);
+            return static_cast<int>((std::string(space) == "linear" ? LinearToSrgb(mapped) : mapped) * 255 + 0.5f);
+        };
+        auto center = [&](const RenderTarget& target) { return channel(target.color[32 * 96 + 48], 0); };
+        auto checkGpu = [&]() {
+            if (!gpuAvailable) return;
+            RenderView view;
+            MakeSceneView(e.GetScene(), 96.0f / 64, view);
+            {
+                e.Gpu()->Render(e.GetScene(), view, gpu);
+                const RenderStats stats = e.Gpu()->Render(e.GetScene(), view, gpu);
+                CHECK(std::string(stats.postGraph) == (compile ? "compiled" : "interpreted"));
+                double sum = 0;
+                for (size_t i = 0; i < shot.color.size(); ++i) for (int shift : {0, 8, 16})
+                    sum += std::abs(channel(shot.color[i], shift) - channel(gpu.color[i], shift));
+                CHECK(sum / static_cast<double>(shot.color.size() * 3) < 2);
+            }
+        };
+        auto create = [&](const char* path, const char* injection, const char* source) {
+            Json args = Json::MakeObject();
+            args["path"] = path;
+            args["graph"] = Json::parse(source);
+            if (injection) args["graph"]["injection"] = injection;
+            CHECK(e.Call("shader.create", args)["ok"].asBool());
+        };
+        auto select = [&](const char* path, float bloom = 0) {
+            Json args = Json::parse(R"({"id":"Camera","type":"PostProcess","values":{"bloomThreshold":1,"bloomRadius":4}})");
+            args["values"]["shader"] = path;
+            args["values"]["bloom"] = bloom;
+            CHECK(e.Call("component.set", args)["ok"].asBool());
+            e.RenderGameView(shot);
+        };
+        const char* half = R"({"stage":"post","nodes":[{"op":"uv"},{"op":"sceneColor","args":[0]},
+          {"op":"constant","value":0.5},{"op":"multiply","args":[1,2]}],"color":3})";
+        create("default.shader.json", nullptr, half);
+        create("after.shader.json", "afterToneMapping", half);
+        create("before.shader.json", "beforeToneMapping", half);
+        select("default.shader.json");
+        defaultShot = shot;
+        checkGpu();
+        select("after.shader.json");
+        CHECK(shot.color == defaultShot.color);
+        CHECK(std::abs(center(shot) - expected(4) / 2) <= 1);
+        checkGpu();
+        select("before.shader.json");
+        CHECK(std::abs(center(shot) - expected(2)) <= 1);  // sceneColor saw 4, not the clipped display image.
+        CHECK(center(shot) > center(defaultShot) + 50);
+        checkGpu();
+        select("before.shader.json", 1);
+        CHECK(std::abs(center(shot) - expected(3)) <= 1);  // bloom extracts 2 - threshold, after the graph.
+        checkGpu();
+        create("dark.shader.json", "beforeToneMapping", R"({"stage":"post","nodes":[{"op":"constant","value":0}],"color":0})");
+        select("dark.shader.json", 1);
+        CHECK(std::all_of(shot.color.begin(), shot.color.end(), [](uint32_t c) { return (c & 0xffffff) == 0; }));
+        checkGpu();
+        create("bright.shader.json", "beforeToneMapping", R"({"stage":"post","nodes":[{"op":"constant","value":4}],"color":0})");
+        select("bright.shader.json", 1);
+        CHECK(std::abs(center(shot) - expected(7)) <= 1);  // graph-created HDR color blooms, including the background.
+        checkGpu();
+        create("blur.shader.json", "beforeToneMapping", R"({"stage":"post","nodes":[{"op":"uv"},
+          {"op":"constant","value":1.6},{"op":"sceneBlur","args":[0,1]},{"op":"constant","value":0.5},
+          {"op":"multiply","args":[2,3]}],"color":4})");
+        select("blur.shader.json", 0.5f);
+        CHECK(std::abs(center(shot) - expected(2.5f)) <= 1);
+        checkGpu();
+        CHECK(Call(e, "component.set", R"({"id":"Camera","type":"PostProcess","values":{"fxaa":true,"vignette":0.3,"saturation":0.7,"exposure":0.7}})")["ok"].asBool());
+        select("blur.shader.json", 0.5f);
+        checkGpu();
+    }
+}
+
+TEST(PostProcessGraph) {
+    // PostProcess.shader runs a "stage": "post" graph on the display image in both renderers: sceneColor/
+    // sceneBlur at uv, texel, uniforms from PostProcess.shaderUniforms; stages are checked; the new noise,
+    // fbm, pow, length and smoothstep ops agree between the CPU reference and the GPU (interpreted post
+    // graph and compiled surface graph).
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("post_graph"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    // Stage checks: surface inputs are rejected in a post graph and post inputs on a surface.
+    Json bad = Call(e, "shader.create", R"J({"path":"bad.shader.json","graph":{"stage":"post","nodes":[{"op":"normal"}],"color":0}})J");
+    CHECK(!bad["ok"].asBool() && bad["error"]["message"].asString().find("surface input") != std::string::npos);
+    bad = Call(e, "shader.create", R"J({"path":"bad.shader.json","graph":{"nodes":[{"op":"uv"},{"op":"sceneColor","args":[0]}],"color":1}})J");
+    CHECK(!bad["ok"].asBool() && bad["error"]["message"].asString().find("stage") != std::string::npos);
+    bad = Call(e, "shader.create", R"J({"path":"bad.shader.json","graph":{"stage":"post","nodes":[{"op":"uv"}],"color":0,"emissive":0}})J");
+    CHECK(!bad["ok"].asBool());
+    {
+        // 60 nodes, in a surface graph as in a post graph (both hold kMaxNodes).
+        Json nodes = Json::MakeArray();
+        for (int i = 0; i < 60; ++i) { Json node = Json::MakeObject(); node["op"] = "uv"; nodes.push(node); }
+        Json graph = Json::MakeObject();
+        graph["nodes"] = nodes;
+        graph["color"] = 0;
+        ShaderGraph compiled;
+        CHECK(CompileShaderGraph(graph, compiled, &error) && compiled.stage == ShaderStage::Surface);
+        graph["stage"] = "post";
+        CHECK(CompileShaderGraph(graph, compiled, &error) && compiled.stage == ShaderStage::Post);
+    }
+    // Noise: values in 0..1 that change smoothly; fbm stays within 0..0.94.
+    for (int i = 0; i < 64; ++i) {
+        const float x = static_cast<float>(i) * 0.37f, y = static_cast<float>(i) * 0.11f;
+        CHECK(ShaderNoise(x, y, 1.3f) >= 0 && ShaderNoise(x, y, 1.3f) <= 1);
+        CHECK(ShaderFbm(x, y, 2.0f) >= 0 && ShaderFbm(x, y, 2.0f) <= 0.94f);
+        CHECK(std::fabs(ShaderNoise(x, y, 1.3f) - ShaderNoise(x + 0.001f, y, 1.3f)) < 0.01f);
+    }
+
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0.9,0.85,0.7]},"PostProcess":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Card","components":{"MeshRenderer":{"mesh":"quad","unlit":true,"color":[0.3,0.5,0.8]}}})J");
+    RenderTarget plain, shot;
+    for (RenderTarget* target : {&plain, &shot}) target->Resize(160, 90);
+    e.RenderGameView(plain);
+    auto at = [](const RenderTarget& t, int x, int y) { return t.color[static_cast<size_t>(y) * static_cast<size_t>(t.width) + static_cast<size_t>(x)]; };
+    auto channel = [](uint32_t c, int shift) { return static_cast<int>((c >> shift) & 255); };
+    // An inverting graph with a uniform gain: every pixel becomes gain * (1 - color).
+    CHECK(Call(e, "shader.create", R"J({"path":"invert.shader.json","graph":{"stage":"post","uniforms":{"gain":1},
+      "nodes":[{"op":"uv"},{"op":"sceneColor","args":[0]},{"op":"constant","value":1},{"op":"subtract","args":[2,1]},
+               {"op":"uniform","name":"gain"},{"op":"multiply","args":[3,4]}],"color":5}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"shader":"invert.shader.json"}})J")["ok"].asBool());
+    e.RenderGameView(shot);
+    for (int shift : {0, 8, 16}) CHECK(std::abs(channel(at(shot, 80, 45), shift) + channel(at(plain, 80, 45), shift) - 255) <= 1);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"shaderUniforms":{"gain":0.5}}})J")["ok"].asBool());
+    e.RenderGameView(shot);
+    CHECK(std::abs(channel(at(shot, 80, 45), 0) - (255 - channel(at(plain, 80, 45), 0)) / 2) <= 1);
+    // A surface graph is skipped (logged): the frame stays as it was without one.
+    CHECK(Call(e, "shader.create", R"J({"path":"flat.shader.json","graph":{"nodes":[{"op":"constant","value":[1,0,0,1]}],"color":0}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"shader":"flat.shader.json","shaderUniforms":{}}})J")["ok"].asBool());
+    e.RenderGameView(shot);
+    CHECK(shot.Hash() == plain.Hash());
+    // Everything new at once: blur, noise, fbm, pow, length, smoothstep and texel, against the GPU renderer.
+    CHECK(Call(e, "shader.create", R"J({"path":"paint.shader.json","graph":{"stage":"post","uniforms":{"spacing":1.6},
+      "nodes":[{"op":"uv"},{"op":"texel"},{"op":"swizzle","args":[1],"value":[2,3,2,3]},{"op":"multiply","args":[0,2]},
+               {"op":"constant","value":[0.05,0.05,1.0,0]},{"op":"multiply","args":[3,4]},{"op":"fbm","args":[5]},
+               {"op":"noise","args":[5]},{"op":"uniform","name":"spacing"},{"op":"sceneBlur","args":[0,8]},
+               {"op":"sceneColor","args":[0]},{"op":"subtract","args":[10,9]},{"op":"length","args":[11]},
+               {"op":"constant","value":0},{"op":"constant","value":0.2},{"op":"smoothstep","args":[13,14,12]},
+               {"op":"constant","value":0.5},{"op":"add","args":[6,16]},{"op":"pow","args":[9,17]},
+               {"op":"mix","args":[18,10,15]},{"op":"multiply","args":[7,16]},{"op":"add","args":[20,16]},
+               {"op":"multiply","args":[19,21]},{"op":"add","args":[22,20]}],"color":23}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"shader":"paint.shader.json"}})J")["ok"].asBool());
+    e.RenderGameView(shot);
+    CHECK(shot.Hash() != plain.Hash());
+    // A surface graph with the new ops on the card, compiled for the GPU.
+    CHECK(Call(e, "shader.create", R"J({"path":"cloud.shader.json","graph":{
+      "nodes":[{"op":"position"},{"op":"constant","value":[3,3,3,0]},{"op":"multiply","args":[0,1]},{"op":"fbm","args":[2]},
+               {"op":"baseColor"},{"op":"constant","value":0.5},{"op":"add","args":[3,5]},{"op":"multiply","args":[4,6]}],"color":7}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"cloud.mat.json","values":{"unlit":true,"shader":"cloud.shader.json"}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Card","type":"MeshRenderer","values":{"material":"cloud.mat.json"}})J")["ok"].asBool());
+    e.RenderGameView(shot);
+    RenderView view;
+    MakeSceneView(e.GetScene(), 160.0f / 90, view);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(160, 90);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        const RenderStats gpuStats = e.Gpu()->Render(e.GetScene(), view, gpu);  // programs may compile in the background on the first frame
+        CHECK(std::string(gpuStats.postGraph) == "compiled");
+        auto difference = [&](const RenderTarget& a, const RenderTarget& b) {
+            double sum = 0;
+            for (size_t i = 0; i < a.color.size(); ++i) for (int shift : {0, 8, 16})
+                sum += std::abs(channel(a.color[i], shift) - channel(b.color[i], shift));
+            return sum / static_cast<double>(a.color.size() * 3);
+        };
+        CHECK(difference(shot, gpu) < 3);
+        // Compiled post graphs may be longer than the interpreter holds (64): 100 nodes, a chain of small
+        // brightening steps over sceneColor, still agree with the CPU reference.
+        Json nodes = Json::MakeArray();
+        auto node = [&](const char* op, std::initializer_list<int> args, const Json* value = nullptr) {
+            Json item = Json::MakeObject();
+            item["op"] = op;
+            if (args.size()) { Json list = Json::MakeArray(); for (int a : args) list.push(a); item["args"] = list; }
+            if (value) item["value"] = *value;
+            nodes.push(item);
+            return static_cast<int>(nodes.size()) - 1;
+        };
+        const Json step(0.004);
+        const int uv = node("uv", {});
+        int color = node("sceneColor", {uv});
+        const int amount = node("constant", {}, &step);
+        while (nodes.size() < 100) color = node("add", {color, amount});
+        Json graph = Json::MakeObject();
+        graph["format"] = "ownengine.shader";
+        graph["stage"] = "post";
+        graph["nodes"] = nodes;
+        graph["color"] = color;
+        Json create = Json::MakeObject();
+        create["path"] = "long.shader.json";
+        create["graph"] = graph;
+        CHECK(Call(e, "shader.create", create.dump().c_str())["ok"].asBool());
+        CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"shader":"long.shader.json"}})J")["ok"].asBool());
+        e.RenderGameView(shot);
+        CHECK(channel(at(shot, 80, 45), 0) > channel(at(plain, 80, 45), 0) + 60);  // 97 steps of +0.004 ~ +99/255
+        MakeSceneView(e.GetScene(), 160.0f / 90, view);  // the view holds a copy of PostProcess
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        const RenderStats longStats = e.Gpu()->Render(e.GetScene(), view, gpu);
+        CHECK(std::string(longStats.postGraph) == "compiled");
+        CHECK(difference(shot, gpu) < 3);
+    } else std::printf("  SKIP post graph GPU comparison (%s)\n", error.c_str());
+}
+
+TEST(PostProcessVignetteColor) {
+    // vignetteColor: the edges blend toward a color (multiplied in); black keeps the plain darkening.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("vignette_color"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[1,1,1]},
+      "PostProcess":{"vignette":1,"vignetteRadius":0.2,"vignetteSoftness":0.5}}})J");
+    RenderTarget dark, warm;
+    for (RenderTarget* target : {&dark, &warm}) target->Resize(96, 54);
+    e.RenderGameView(dark);
+    const uint32_t corner = dark.color[0] & 0xFFFFFF, center = dark.color[static_cast<size_t>(27) * 96 + 48] & 0xFFFFFF;
+    CHECK(corner == 0 && center == 0xFFFFFF);  // black: the corner goes fully dark, the center stays white
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"vignetteColor":[1,0.5,0]}})J")["ok"].asBool());
+    e.RenderGameView(warm);
+    const uint32_t tinted = warm.color[0];
+    CHECK((tinted & 255) == 255 && std::abs(static_cast<int>((tinted >> 8) & 255) - 128) <= 1 && ((tinted >> 16) & 255) == 0);
+    CHECK((warm.color[static_cast<size_t>(27) * 96 + 48] & 0xFFFFFF) == 0xFFFFFF);
+    RenderView view;
+    MakeSceneView(e.GetScene(), 96.0f / 54, view);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(96, 54);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        for (int shift : {0, 8, 16})
+            CHECK(std::abs(static_cast<int>((gpu.color[0] >> shift) & 255) - static_cast<int>((tinted >> shift) & 255)) <= 2);
+    } else std::printf("  SKIP vignette color GPU comparison (%s)\n", error.c_str());
 }
 
 TEST(SpriteLayerAndAdditiveBlend) {
@@ -10594,7 +11521,7 @@ TEST(ShaderGraphValidationAndReference) {
     for (int i = 0; i < ShaderGraph::kMaxNodes + 1; ++i) oversized["nodes"].push(Json::parse(R"J({"op":"constant","value":1})J"));
     oversized["color"] = 0;
     CHECK(!CompileShaderGraph(oversized, graph, &error));
-    CHECK(error.find("1..48") != std::string::npos);
+    CHECK(error.find("1..128") != std::string::npos);
 }
 
 TEST(ShaderGraphVertexOffset) {
@@ -14366,8 +15293,25 @@ TEST(EditorShaderGraphOrderingAndValidation) {
         if (op == "constant") node["value"] = 1;
         if (op == "uniform") node["name"] = "gain";
         if (op == "swizzle") node["value"] = Json(Json::Array{0, 1, 2, 3});
+        // Light-stage inputs may only feed the light output.
+        if (op == "lightVector" || op == "lightColor" || op == "lightAttenuation") { document["color"] = 0; document["light"] = 1; }
+        if (!EditorShaderOperationInStage(op, false)) document["stage"] = "post";
+        CHECK(EditorShaderOperationInStage(op, false) || EditorShaderOperationInStage(op, true));
         document["nodes"].push(node); CHECK(OrderEditorShaderGraph(document, ordered, &error));
     }
+    // Post graphs (`"stage": "post"`) edit in the same workspace: their own nodes and node limit.
+    CHECK(!EditorShaderOperationInStage("sceneColor", false) && EditorShaderOperationInStage("sceneColor", true));
+    CHECK(!EditorShaderOperationInStage("normal", true) && EditorShaderOperationInStage("noise", true));
+    Json post = Json::parse(R"({"stage":"post","uniforms":{},"nodes":[{"op":"uv"},{"op":"sceneColor","args":[0]}],"color":1})");
+    CHECK(EditorShaderIsPost(post) && OrderEditorShaderGraph(post, ordered, &error));
+    for (int i = 0; i < 60; ++i) post["nodes"].push(Json::parse(R"({"op":"constant","value":1})"));
+    CHECK(EditorShaderMaxNodes() == ShaderGraph::kMaxNodes && OrderEditorShaderGraph(post, ordered, &error));
+    // Surface graphs hold as many nodes (beyond the GPU interpreter's 48 they run as their compiled program).
+    Json large = Json::parse(R"({"uniforms":{},"nodes":[{"op":"uv"}],"color":0})");
+    for (int i = 0; i < 61; ++i) large["nodes"].push(Json::parse(R"({"op":"constant","value":1})"));
+    CHECK(OrderEditorShaderGraph(large, ordered, &error));
+    while (large["nodes"].size() <= static_cast<size_t>(ShaderGraph::kMaxNodes)) large["nodes"].push(Json::parse(R"({"op":"constant","value":1})"));
+    CHECK(!OrderEditorShaderGraph(large, ordered, &error) && error.find("1..128") != std::string::npos);
 }
 
 
@@ -14947,6 +15891,8 @@ TEST(NativeEditorShaderGraphAndMaterialWorkflow) {
         CHECK(editor.ShaderDocument()["nodes"].size() == 1);
         click(control("add")); frames(3);
         CHECK(!GImGui->OpenPopupStack.empty());
+        // The list scrolls; the search box has the focus, so typing narrows it to the node.
+        ImGui::GetIO().AddInputCharactersUTF8("constant"); frames(3);
         if (!GImGui->OpenPopupStack.empty()) click(control("palette:constant"));
         CHECK(editor.ShaderDocument()["nodes"].size() == 2);
         frames(3);
@@ -22050,15 +22996,20 @@ TEST(NativeEditorSkeletonEditor) {
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    // Compiled GPU programs are kept between tests and runs (keyed by their source, so a changed shader
+    // recompiles); without it every GPU test spends seconds compiling the built-in shaders.
+    Engine::SetDefaultGpuShaderCache(AbsolutePath("build/test-shader-cache"));
     // OE_TEST_FILTER=Name runs only the tests whose names contain it (repeat a flaky one, iterate on one).
     const char* filter = std::getenv("OE_TEST_FILTER");
     size_t ran = 0;
     for (const TestCase& t : Tests()) {
         if (filter && *filter && !std::strstr(t.name, filter)) continue;
         int before = g_failures;
+        const auto start = std::chrono::steady_clock::now();
         t.fn();
+        const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
         ++ran;
-        std::printf("%s %s\n", g_failures == before ? "PASS" : "FAIL", t.name);
+        std::printf("%s %s (%lld ms)\n", g_failures == before ? "PASS" : "FAIL", t.name, ms);
     }
     std::printf("\n%zu tests, %d failed checks\n", ran, g_failures);
     return g_failures == 0 ? 0 : 1;

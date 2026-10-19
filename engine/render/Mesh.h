@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Math.h"
+#include "render/ColorSpace.h"
 #include "render/ShaderGraph.h"
 #include "scene/AnimationEvents.h"
 
@@ -19,15 +20,30 @@ struct Texture {
     int height = 0;
     std::vector<uint32_t> texels;
     uint32_t version = 0;  // bumped when texels change in place (font atlases grow)
+    // A color image whose texels are sRGB-encoded (the default). In a color slot (base, emissive, the graph
+    // `texture` node, decals) of a linear project it is decoded per texel before filtering, as a GPU SRGB8A8
+    // texture is. false (`<image>.texture.json` {"sRGB": false}, Unity's "sRGB (Color Texture)" off): data such as
+    // flow or noise maps, used as stored in any slot. Data slots (normal, metallic-roughness, occlusion) never decode.
+    bool srgb = true;
     // Bilinear sample with repeat wrapping; (0,0) is the top-left corner.
     Color Sample(float u, float v) const;
-    // Same with alpha (0..1) and optional nearest-texel sampling (pixel art).
-    Color Sample(float u, float v, bool nearest, float* alpha) const;
+    // Same with alpha (0..1), optional nearest-texel sampling (pixel art) and `decode`: the four texels are turned
+    // from sRGB to linear (SrgbToLinear) before they are blended, as the GPU samples an SRGB8A8 texture.
+    Color Sample(float u, float v, bool nearest, float* alpha, bool decode = false) const;
+    // Whether a color slot decodes this texture under `linear` lighting (RenderLights::linear).
+    bool Decoded(bool linear) const { return linear && srgb; }
 };
 
 // How a surface looks (glTF 2.0 metallic-roughness model). Shared by both
 // renderers; loaded from models (their materials) and from .mat.json files.
 enum class AlphaMode { Opaque, Mask, Blend };
+
+// Largest Material::outlineWidth in world units (also the cull margin of the world outline graph) and in
+// pixels (outlineUnits "pixels").
+constexpr float kMaxOutlineWidth = 0.25f;
+constexpr float kMaxOutlinePixels = 16.0f;
+// Longest Material::nextPass chain a draw follows (the material itself not counted).
+constexpr int kMaxMaterialPasses = 4;
 
 struct Material {
     std::string name;  // model materials: the name in the source file (the slot MeshRenderer.materials replaces)
@@ -46,7 +62,10 @@ struct Material {
     std::shared_ptr<const Texture> emissiveTexture;           // multiplies emissive
     AlphaMode alphaMode = AlphaMode::Opaque;
     float alphaCutoff = 0.5f;  // Mask: texels below are discarded
-    bool doubleSided = false;
+    bool doubleSided = false;  // `cull: "none"`: both faces are drawn
+    bool cullFront = false;    // `cull: "front"`: only back faces are drawn (inverted hulls, inside views)
+    bool castShadows = true;   // false: never in the shadow maps (whatever MeshRenderer.castShadows says)
+    bool smoothNormals = false;  // vertex normals averaged at shared positions (Mesh::SmoothNormals): closed outline shells
     bool additive = false;     // Blend only: add color * alpha to the target (glows) instead of mixing
     bool unlit = false;
     bool pixelArt = false;     // nearest-neighbour sampling
@@ -56,6 +75,16 @@ struct Material {
     std::string shaderPath;                                  // project-relative surface graph asset
     std::shared_ptr<const ShaderGraph> shader;                // null retains the standard material
     std::array<Vec4, ShaderGraph::kMaxUniforms> shaderUniforms{};  // validated graph defaults/overrides
+    // Outline (inverted hull): > 0 draws the surface again after the opaque ones, pushed out along the
+    // vertex normals by this many world units (or screen pixels with outlinePixels), front faces culled,
+    // unlit in outlineColor. Opaque and cut-out materials only; 0..kMaxOutlineWidth (kMaxOutlinePixels).
+    float outlineWidth = 0.0f;
+    Color outlineColor{0, 0, 0};
+    bool outlinePixels = false;  // outlineUnits "pixels": the same thickness on screen at any distance
+    // `nextPass`: a material drawn on the same submesh right after this one (Godot's next_pass), e.g. an
+    // outline shell with `cull: "front"` and a graph offset, or a glow. Chains up to kMaxMaterialPasses.
+    std::string nextPassPath;
+    std::shared_ptr<const Material> nextPass;
     // Sprite/Tilemap light2D (unlit surfaces only): shaded by this 2D light map with ambient2D;
     // normalTexture is then the sprite's normal map and flip2D undoes the sprite's flips.
     std::shared_ptr<const Light2DMap> light2D;
@@ -142,6 +171,13 @@ struct Mesh {
     std::vector<Vec3> normals;      // one per position
     std::vector<float> uvs;         // two per position
     std::vector<Vec4> colors;       // optional RGBA per vertex; empty means white
+    // `colors` hold linear values (glTF COLOR_0, by its specification) instead of sRGB-authored ones (FBX, sprite
+    // tints, 2D skeleton slots): linear lighting uses them as they are rather than decoding them (VertexColor).
+    bool linearColors = false;
+    // Vertex i's color as the renderers light it (`linear`: RenderLights::linear); white without colors.
+    Vec4 VertexColor(size_t i, bool linear) const {
+        return i < colors.size() ? SceneColor(colors[i], linear && !linearColors) : Vec4(1, 1, 1, 1);
+    }
     std::vector<Vec4> particleCustom; // optional four per-particle material attributes
     std::vector<Vec4> particleData; // optional normalized age/random/world speed per vertex
     std::vector<Vec4> tangents;     // xyz tangent (+u), w: bitangent sign; from ComputeTangents
@@ -166,6 +202,9 @@ struct Mesh {
     void ComputeBounds();
     // Fills `normals` from face normals (area weighted) when a source has none.
     void ComputeNormals();
+    // `normals` averaged over the vertices at the same position (split by hard edges or uv seams), so a
+    // shell pushed out along them stays closed (Material::smoothNormals). Where they cancel out, the own normal.
+    std::vector<Vec3> SmoothNormals() const;
     // Per-vertex tangents from the UVs (for normal maps).
     void ComputeTangents();
     // With more than kDrawJoints joints: cuts every submesh into ranges that each use at most

@@ -7,9 +7,12 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <set>
 
 #include "assets/Assets.h"
 #include "assets/SpriteAtlas.h"
+#include "render/ColorSpace.h"
+#include "core/Log.h"
 #include "scene/SpriteClip.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
@@ -269,8 +272,113 @@ Mat4 RenderItem::VertexSkinMatrix(size_t vertex) const {
     return total > 0 ? matrix : Mat4{};
 }
 
-std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye, const RenderLights* lights, bool playing) {
-    std::vector<DrawCall> opaque, blended;
+PostGraph ResolvePostGraph(const PostProcess& post, AssetManager* assets) {
+    PostGraph result;
+    if (post.shader.empty() || !assets) return result;
+    std::string error;
+    std::shared_ptr<const ShaderGraph> graph = assets->GetShader(post.shader, &error);
+    if (graph && graph->stage != ShaderStage::Post) error = "it is a surface graph; add \"stage\": \"post\"";
+    if (graph && error.empty() && !ShaderUniforms(*graph, post.shaderUniforms, result.uniforms, &error)) graph.reset();
+    if (!graph || !error.empty()) {
+        // Every frame asks again: warn once per path and message, not 60 times a second.
+        static std::mutex mutex;
+        static std::set<std::string> reported;
+        const std::string message = post.shader + ": " + (error.empty() ? "cannot load" : error);
+        std::lock_guard<std::mutex> lock(mutex);
+        if (reported.insert(message).second) OE_LOG_WARN("render", "PostProcess.shader %s (skipped)", message.c_str());
+        return PostGraph{};
+    }
+    result.graph = std::move(graph);
+    return result;
+}
+
+GraphViewInputs MakeGraphViewInputs(const Mat4& proj, int width, int height) {
+    GraphViewInputs view;
+    const float w = static_cast<float>(std::max(1, width)), h = static_cast<float>(std::max(1, height));
+    view.screenSize = Vec4(w, h, 1 / w, 1 / h);
+    // proj(1,1) is cot(fov/2) for perspective and 1/orthoSize for orthographic projections (proj(3,3) = 1).
+    const float scaleY = proj.at(1, 1) != 0 ? 2 / (proj.at(1, 1) * h) : 0;
+    view.pixelScale = proj.at(3, 3) == 1 ? Vec4(0, scaleY, 0, 0) : Vec4(scaleY, 0, 0, 0);
+    return view;
+}
+
+namespace {
+std::shared_ptr<const ShaderGraph> CompileOutlineGraph(const char* source) {
+    std::string error;
+    auto graph = std::make_shared<ShaderGraph>();
+    if (!CompileShaderGraph(Json::parse(source, &error), *graph, &error)) OE_LOG_ERROR("render", "outline graph: %s", error.c_str());
+    return graph;
+}
+
+// Fills the reserved uniforms a graph declares (ShaderGraph::cameraUniform...) for this view.
+void BindReservedUniforms(Material& material, const Vec3& eye, const RenderLights* lights, bool playing, const GraphViewInputs* view) {
+    if (!material.shader) return;
+    const ShaderGraph& graph = *material.shader;
+    auto set = [&](int slot, const Vec4& value) { if (slot >= 0) material.shaderUniforms[static_cast<size_t>(slot)] = value; };
+    set(graph.cameraUniform, Vec4(eye, 1));
+    set(graph.playingUniform, playing ? Vec4(1, 1, 1, 1) : Vec4(0, 0, 0, 0));
+    if (lights && !lights->dirs.empty()) set(graph.lightUniform, Vec4(-Normalize(lights->dirs[0].dir), 0));
+    if (view) {
+        set(graph.screenUniform, view->screenSize);
+        set(graph.pixelScaleUniform, view->pixelScale);
+    }
+}
+}  // namespace
+
+const std::shared_ptr<const ShaderGraph>& OutlineShaderGraph(bool pixels) {
+    // Vertex offset = world normal * width (pixels: times the world size of a pixel at the vertex, from the
+    // reserved cameraPosition and pixelScale); colour = the outline colour. OutlineMaterial looks the uniform
+    // slots up by name, so their order here does not matter.
+    static const std::shared_ptr<const ShaderGraph> world = CompileOutlineGraph(
+        R"({"format": "ownengine.shader", "uniforms": {"width": 0, "color": [0, 0, 0, 1]},
+            "nodes": [{"op": "normal"}, {"op": "uniform", "name": "width"}, {"op": "multiply", "args": [0, 1]},
+                      {"op": "uniform", "name": "color"}],
+            "color": 3, "offset": 2, "maxOffset": 0.25})");
+    static const std::shared_ptr<const ShaderGraph> screen = CompileOutlineGraph(
+        R"({"format": "ownengine.shader",
+            "uniforms": {"width": 0, "color": [0, 0, 0, 1], "cameraPosition": [0, 0, 0, 1], "pixelScale": [0, 0, 0, 0]},
+            "nodes": [{"op": "normal"}, {"op": "position"}, {"op": "uniform", "name": "cameraPosition"},
+                      {"op": "subtract", "args": [1, 2]}, {"op": "length", "args": [3]},
+                      {"op": "uniform", "name": "pixelScale"}, {"op": "swizzle", "args": [5], "value": [0, 0, 0, 0]},
+                      {"op": "multiply", "args": [4, 6]}, {"op": "swizzle", "args": [5], "value": [1, 1, 1, 1]},
+                      {"op": "add", "args": [7, 8]}, {"op": "uniform", "name": "width"}, {"op": "multiply", "args": [9, 10]},
+                      {"op": "multiply", "args": [0, 11]}, {"op": "uniform", "name": "color"}],
+            "color": 13, "offset": 12, "maxOffset": 2})");
+    return pixels ? screen : world;
+}
+
+namespace {
+// Linear lighting: the material's authored colors decoded (graph constants and uniforms stay numbers).
+void LinearMaterial(Material& m) {
+    m.baseColor = SrgbToLinear(m.baseColor);
+    m.emissive = SrgbToLinear(m.emissive);
+    m.outlineColor = SrgbToLinear(m.outlineColor);
+}
+}  // namespace
+
+Material OutlineMaterial(const Material& source) {
+    Material m;
+    m.name = source.name;
+    m.unlit = true;
+    m.fog = source.fog;
+    m.cullFront = true;
+    m.castShadows = false;
+    m.smoothNormals = true;  // a cube's shell stays closed at its corners
+    m.outlinePixels = source.outlinePixels;
+    m.shader = OutlineShaderGraph(source.outlinePixels);
+    m.shaderUniforms = m.shader->defaults;
+    const float width = Clamp(source.outlineWidth, 0.0f, source.outlinePixels ? kMaxOutlinePixels : kMaxOutlineWidth);
+    const Color& c = source.outlineColor;
+    for (size_t slot = 0; slot < m.shader->uniformNames.size(); ++slot) {
+        if (m.shader->uniformNames[slot] == "width") m.shaderUniforms[slot] = Vec4(width, width, width, width);
+        else if (m.shader->uniformNames[slot] == "color") m.shaderUniforms[slot] = Vec4(c.r, c.g, c.b, 1);
+    }
+    return m;
+}
+
+std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye, const RenderLights* lights, bool playing,
+                                    const GraphViewInputs* view) {
+    std::vector<DrawCall> opaque, blended, passes;
     std::vector<float> distance;
     for (size_t i = 0; i < items.size(); ++i) {
         const RenderItem& it = items[i];
@@ -282,23 +390,44 @@ std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const 
             dc.item = i;
             dc.submesh = s;
             dc.material = it.SubmeshMaterial(it.mesh->submeshes[s]);
+            if (lights && lights->linear) LinearMaterial(dc.material);
             dc.blend = dc.material.Blended();
-            if (dc.material.shader) {
-                const ShaderGraph& graph = *dc.material.shader;
-                if (graph.cameraUniform >= 0) dc.material.shaderUniforms[static_cast<size_t>(graph.cameraUniform)] = Vec4(eye, 1);
-                if (graph.playingUniform >= 0) dc.material.shaderUniforms[static_cast<size_t>(graph.playingUniform)] = playing ? Vec4(1, 1, 1, 1) : Vec4(0, 0, 0, 0);
-                if (graph.lightUniform >= 0 && lights && !lights->dirs.empty())
-                    dc.material.shaderUniforms[static_cast<size_t>(graph.lightUniform)] = Vec4(-Normalize(lights->dirs[0].dir), 0);
-            }
+            BindReservedUniforms(dc.material, eye, lights, playing, view);
             if (dc.material.opacity <= 0.0f && dc.blend && !dc.material.shader) continue;
+            // Extra passes on the same submesh: the material's nextPass chain, then its outline shell.
+            // Opaque ones follow every opaque surface (they only add pixels, and small meshes batch);
+            // blended ones sort with the transparent surfaces right after this one (same distance).
+            std::vector<Material> extra;
+            for (const Material* next = dc.material.nextPass.get(); next && static_cast<int>(extra.size()) < kMaxMaterialPasses;
+                 next = next->nextPass.get())
+                extra.push_back(*next);
+            if (lights && lights->linear) for (Material& next : extra) LinearMaterial(next);
+            if (dc.material.outlineWidth > 0.0f && !dc.blend) extra.push_back(OutlineMaterial(dc.material));
             if (dc.blend) {
                 blended.push_back(std::move(dc));
                 distance.push_back(d);
             } else {
                 opaque.push_back(std::move(dc));
             }
+            int pass = 0;
+            for (Material& material : extra) {
+                DrawCall p;
+                p.item = i;
+                p.submesh = s;
+                p.pass = ++pass;
+                p.material = std::move(material);
+                p.blend = p.material.Blended();
+                BindReservedUniforms(p.material, eye, lights, playing, view);
+                if (p.blend) {
+                    blended.push_back(std::move(p));
+                    distance.push_back(d);
+                } else {
+                    passes.push_back(std::move(p));
+                }
+            }
         }
     }
+    for (DrawCall& p : passes) opaque.push_back(std::move(p));
     std::vector<size_t> order(blended.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
@@ -1033,13 +1162,15 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
     return items;
 }
 
-void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float time,
+void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float time, const Vec4& viewer, bool linear,
                          const std::function<void(uint32_t, const Vec3&, const Vec3&)>& fn) {
     const Material& material = draw.material;
     if (!material.shader || material.shader->offset < 0) return;
     const Mesh& m = *item.mesh;
     const Submesh& sub = m.submeshes[draw.submesh];
     std::vector<uint8_t> done(m.positions.size(), 0);
+    const std::vector<Vec3> smooth = material.smoothNormals ? m.SmoothNormals() : std::vector<Vec3>();
+    const std::vector<Vec3>& normals = material.smoothNormals ? smooth : m.normals;
     ShaderInputs input;
     input.baseColor = Vec4(material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
     input.time = time;
@@ -1051,8 +1182,8 @@ void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float tim
         const Mat4 skin = item.VertexSkinMatrix(vertex);
         const Mat4 skinNormal = item.joints.empty() ? Mat4{} : skin.Inverse().Transposed();
         const Vec3 wpos = item.world.TransformPoint(skin.TransformPoint(m.positions[vertex]));
-        const Vec3 normal = vertex < m.normals.size()
-            ? Normalize(item.normalMatrix.TransformDir(skinNormal.TransformDir(m.normals[vertex]))) : Vec3(0, 1, 0);
+        const Vec3 normal = vertex < normals.size()
+            ? Normalize(item.normalMatrix.TransformDir(skinNormal.TransformDir(normals[vertex]))) : Vec3(0, 1, 0);
         float u = 0, v = 0;
         if (vertex * 2 + 1 < m.uvs.size()) {
             u = m.uvs[vertex * 2];
@@ -1064,11 +1195,13 @@ void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float tim
         input.custom = item.particleCustom + (vertex < m.particleCustom.size() ? m.particleCustom[vertex] : Vec4());
         input.baseColor = Vec4(material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
         if (vertex < m.colors.size()) {
-            const Vec4 c = m.colors[vertex];
+            const Vec4 c = m.VertexColor(vertex, linear);
             input.baseColor = Vec4(input.baseColor.x*c.x, input.baseColor.y*c.y, input.baseColor.z*c.z, input.baseColor.w*c.w);
         }
         input.position = Vec4(wpos, 1);
         input.normal = Vec4(normal, 0);
+        input.objectPosition = Vec4(m.positions[vertex], 1);
+        input.viewDirection = ShaderViewDirection(viewer, wpos);
         fn(vertex, wpos, ShaderVertexOffset(*material.shader, input, material.shaderUniforms));
     }
 }
@@ -1092,7 +1225,7 @@ void OffsetRange(const Material& material, Vec3& lo, Vec3& hi) {
 void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, Vec3& lo, Vec3& hi) {
     for (const DrawCall& draw : draws) {
         const RenderItem& it = items[draw.item];
-        if (it.unlit || !draw.material.shader || draw.material.shader->offset < 0) continue;
+        if (it.unlit || draw.pass > 0 || !draw.material.castShadows || !draw.material.shader || draw.material.shader->offset < 0) continue;
         Vec3 a, b, offsetLo, offsetHi;
         OffsetRange(draw.material, offsetLo, offsetHi);
         ItemWorldBounds(it, offsetLo, offsetHi, a, b);
@@ -1132,7 +1265,7 @@ bool BoxInFrustum(const Mat4& viewProj, const Vec3& lo, const Vec3& hi, bool dep
     return true;
 }
 
-RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id) {
+RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id, bool linear) {
     RenderSpotLight result;
     result.id = id;
     const SpotLight* light = scene.Get<SpotLight>(id);
@@ -1150,8 +1283,8 @@ RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id) {
     }
     result.dir = Normalize(direction);
     const float intensity = std::max(0.0f, finite(light->intensity, 0.0f));
-    result.color = Color(std::max(0.0f, finite(light->color.r, 0.0f)), std::max(0.0f, finite(light->color.g, 0.0f)),
-                         std::max(0.0f, finite(light->color.b, 0.0f))) * intensity;
+    result.color = SceneColor(Color(std::max(0.0f, finite(light->color.r, 0.0f)), std::max(0.0f, finite(light->color.g, 0.0f)),
+                                    std::max(0.0f, finite(light->color.b, 0.0f))), linear) * intensity;
     result.range = std::max(0.01f, finite(light->range, 6.0f));
     const float outer = Clamp(finite(light->outerAngle, 30.0f), 0.1f, 89.0f);
     const float inner = Clamp(finite(light->innerAngle, 20.0f), 0.0f, outer);
@@ -1163,12 +1296,14 @@ RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id) {
 
 RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
     RenderLights lights;
+    lights.linear = assets && assets->LinearColor();
+    const bool linear = lights.linear;
     for (const auto& kv : scene.Pool<DirectionalLight>()) {
         RenderDirLight l;
         l.dir = Normalize(scene.WorldMatrix(kv.first).TransformDir(Vec3(0, 0, -1)));
-        l.color = kv.second.color * kv.second.intensity;
-        lights.ambient = lights.ambient + kv.second.ambient;
-        lights.groundAmbient = lights.groundAmbient + (kv.second.hemisphere ? kv.second.groundAmbient : kv.second.ambient);
+        l.color = SceneColor(kv.second.color, linear) * kv.second.intensity;
+        lights.ambient = lights.ambient + SceneColor(kv.second.ambient, linear);
+        lights.groundAmbient = lights.groundAmbient + SceneColor(kv.second.hemisphere ? kv.second.groundAmbient : kv.second.ambient, linear);
         lights.hemisphere = lights.hemisphere || kv.second.hemisphere;
         if (lights.dirs.empty()) {
             lights.shadows = kv.second.shadows;
@@ -1180,22 +1315,22 @@ RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
     }
     if (lights.dirs.empty()) {
         lights.dirs.push_back({Normalize(Vec3(-0.4f, -1.0f, -0.3f)), Color(1, 1, 1)});
-        lights.ambient = Color(0.25f, 0.25f, 0.28f);
+        lights.ambient = SceneColor(Color(0.25f, 0.25f, 0.28f), linear);
     }
     for (const auto& kv : scene.Pool<PointLight>()) {
-        lights.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), kv.second.color * kv.second.intensity,
+        lights.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), SceneColor(kv.second.color, linear) * kv.second.intensity,
                                  std::max(0.01f, kv.second.range), kv.first, kv.second.shadows});
     }
     for (const auto& kv : scene.Pool<SpotLight>()) {
         if (lights.spots.size() == static_cast<size_t>(kMaxSpotLights)) break;
-        lights.spots.push_back(MakeRenderSpotLight(scene, kv.first));
+        lights.spots.push_back(MakeRenderSpotLight(scene, kv.first, linear));
     }
     for (const auto& kv : scene.Pool<Skybox>()) {  // first one wins
         const Skybox& s = kv.second;
         const float i = std::max(0.0f, s.intensity);
         RenderEnvironment& e = lights.env;
         e.present = true;
-        e.sky = s.sky * i; e.horizon = s.horizon * i; e.ground = s.ground * i;
+        e.sky = SceneColor(s.sky, linear) * i; e.horizon = SceneColor(s.horizon, linear) * i; e.ground = SceneColor(s.ground, linear) * i;
         e.reflections = Clamp(s.reflections, 0.0f, 1.0f);
         e.background = s.background;
         e.sun = s.sun && !lights.dirs.empty();

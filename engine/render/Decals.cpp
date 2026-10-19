@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include "assets/Assets.h"
+#include "render/ColorSpace.h"
 #include "render/Renderer.h"
 #include "render/RenderScene.h"
 #include "scene/Components.h"
@@ -35,7 +36,8 @@ std::vector<RenderDecal> GatherDecals(const Scene& scene, AssetManager* assets, 
         decal.id = pair.first; decal.order = source.order;
         decal.worldToBox = Mat4::Scale(Vec3(1/size.x,1/size.y,1/size.z)) * world.Inverse();
         decal.normal = Normalize(world.Inverse().Transposed().TransformDir(Vec3(0,1,0)));
-        decal.color = Color(Bounded(source.color.r,0,1,1),Bounded(source.color.g,0,1,1),Bounded(source.color.b,0,1,1));
+        decal.color = SceneColor(Color(Bounded(source.color.r,0,1,1),Bounded(source.color.g,0,1,1),Bounded(source.color.b,0,1,1)),
+                                 assets && assets->LinearColor());
         decal.opacity = Clamp(source.opacity,0,1);
         decal.edgeFade = Bounded(source.edgeFade,0,0.5f,0.1f);
         decal.normalThreshold = Bounded(source.normalThreshold,-1,0.99f,0.2f);
@@ -65,7 +67,7 @@ float DecalCoverage(const RenderDecal& decal, const Vec3& position, const Vec3& 
     return decal.opacity * fade * facing;
 }
 
-Color ApplyDecals(const std::vector<RenderDecal>& decals, const Texture* atlas, const Vec3& position, const Vec3& normal, Color base) {
+Color ApplyDecals(const std::vector<RenderDecal>& decals, const Texture* atlas, const Vec3& position, const Vec3& normal, Color base, bool linear) {
     if (!atlas) return base;
     for (size_t i = 0; i < decals.size(); ++i) {
         float u = 0, v = 0;
@@ -74,7 +76,7 @@ Color ApplyDecals(const std::vector<RenderDecal>& decals, const Texture* atlas, 
         u = (static_cast<float>(i%4*kDecalTileSize)+1+u*(kDecalTileSize-2))/kDecalAtlasSize;
         v = (static_cast<float>(i/4*kDecalTileSize)+1+v*(kDecalTileSize-2))/kDecalAtlasSize;
         float textureAlpha = 1;
-        const Color color = atlas->Sample(u,v,false,&textureAlpha) * decals[i].color;
+        const Color color = atlas->Sample(u,v,false,&textureAlpha,atlas->Decoded(linear)) * decals[i].color;
         alpha *= textureAlpha;
         base = base*(1-alpha) + color*alpha;
     }

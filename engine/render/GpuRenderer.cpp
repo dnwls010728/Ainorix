@@ -13,6 +13,8 @@
 
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "assets/Assets.h"
+#include "render/ColorSpace.h"
 #include "render/GpuDevice.h"
 #include "render/GraphSource.h"
 #include "render/RenderScene.h"
@@ -152,15 +154,30 @@ void Put(float* dst, float x, float y, float z, float w) {
     dst[3] = w;
 }
 
-void PutGraph(oe_mesh_material_t& uniforms, const Material& material, float time) {
+// One instruction of the mesh shaders' interpreter as GraphCode in Shaders.glsl unpacks it.
+static_assert(static_cast<int>(ShaderOp::ObjectPosition) < 128, "GraphCode packs the opcode in 7 bits");
+static_assert(ShaderGraph::kMaxInterpretedSurfaceNodes <= 48, "GraphCode packs register indices base 48");
+float PackGraphCode(const ShaderInstruction& instruction) {
+    return static_cast<float>(static_cast<int>(instruction.op) +
+                              128 * (instruction.args[0] + 48 * (instruction.args[1] + 48 * instruction.args[2])));
+}
+
+// `compiled`: the pipeline runs the graph's compiled program, which needs no interpreter instructions and has the
+// light stage (`lightStage`). Without it (still compiling in the background, failed) the interpreter runs graphs
+// of up to kMaxInterpretedSurfaceNodes, a larger one draws as its plain material, and a graph with a light output
+// is shaded by the standard lighting. `viewer`: the camera (ShaderViewer).
+void PutGraph(oe_mesh_material_t& uniforms, const Material& material, float time, const Vec4& viewer, bool compiled, bool lightStage) {
     if (!material.shader) return;
-    Put(uniforms.graph_control, static_cast<float>(material.shader->instructions.size()),
-        static_cast<float>(material.shader->color), static_cast<float>(material.shader->emissive), time);
-    Put(uniforms.graph_outputs, static_cast<float>(material.shader->normal), 0, 0, 0);
-    for (size_t node = 0; node < material.shader->instructions.size(); ++node) {
-        const ShaderInstruction& instruction = material.shader->instructions[node];
-        Put(uniforms.graph_code[node], static_cast<float>(instruction.op), static_cast<float>(instruction.args[0]),
-            static_cast<float>(instruction.args[1]), static_cast<float>(instruction.args[2]));
+    const ShaderGraph& graph = *material.shader;
+    const bool interpreted = !compiled && graph.instructions.size() <= static_cast<size_t>(ShaderGraph::kMaxInterpretedSurfaceNodes);
+    if (!compiled && !interpreted) return;
+    Put(uniforms.graph_control, static_cast<float>(graph.instructions.size()), static_cast<float>(graph.color),
+        static_cast<float>(graph.emissive), time);
+    Put(uniforms.graph_outputs, static_cast<float>(graph.normal), lightStage && compiled ? static_cast<float>(graph.light) : -1.0f, 0, 0);
+    Put(uniforms.graph_viewer, viewer.x, viewer.y, viewer.z, viewer.w);
+    for (size_t node = 0; interpreted && node < graph.instructions.size(); ++node) {
+        const ShaderInstruction& instruction = graph.instructions[node];
+        uniforms.graph_code[node / 4][node % 4] = PackGraphCode(instruction);
         Put(uniforms.graph_value[node], instruction.value.x, instruction.value.y, instruction.value.z, instruction.value.w);
     }
     for (size_t slot = 0; slot < material.shaderUniforms.size(); ++slot) {
@@ -172,19 +189,25 @@ void PutGraph(oe_mesh_material_t& uniforms, const Material& material, float time
 // True when the material's graph moves vertices: its depth, shadow and mask draws need mesh_vs too.
 bool Displaced(const Material& material) { return material.shader && material.shader->offset >= 0; }
 
-// Vertex stage of a graph with an `offset` output: the instructions up to that output.
-void PutVertexGraph(oe_mesh_vs_graph_t& uniforms, const Material& material, const RenderItem& item, float time) {
+// Last index of meshPips/hdrMeshPips: which faces the scene pass draws.
+int FaceMode(const Material& material) { return material.cullFront ? 2 : material.doubleSided ? 1 : 0; }
+
+// Vertex stage of a graph with an `offset` output: the instructions up to that output (`compiled` as for PutGraph).
+void PutVertexGraph(oe_mesh_vs_graph_t& uniforms, const Material& material, const RenderItem& item, float time, const Vec4& viewer,
+                    bool compiled) {
     if (!Displaced(material)) return;
     const ShaderGraph& graph = *material.shader;
     const size_t count = static_cast<size_t>(graph.offset) + 1;
+    const bool interpreted = !compiled && count <= static_cast<size_t>(ShaderGraph::kMaxInterpretedSurfaceNodes);
+    if (!compiled && !interpreted) return;
     Put(uniforms.vgraph_control, static_cast<float>(count), static_cast<float>(graph.offset), 0, time);
     Put(uniforms.vgraph_base_color, material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
     Put(uniforms.vgraph_uv_rect, item.uvOffset[0], item.uvOffset[1], item.uvScale[0], item.uvScale[1]);
     Put(uniforms.vgraph_uv_tiling, material.tiling[0], material.tiling[1], material.offset[0], material.offset[1]);
-    for (size_t node = 0; node < count; ++node) {
+    Put(uniforms.vgraph_viewer, viewer.x, viewer.y, viewer.z, viewer.w);
+    for (size_t node = 0; interpreted && node < count; ++node) {
         const ShaderInstruction& instruction = graph.instructions[node];
-        Put(uniforms.vgraph_code[node], static_cast<float>(instruction.op), static_cast<float>(instruction.args[0]),
-            static_cast<float>(instruction.args[1]), static_cast<float>(instruction.args[2]));
+        uniforms.vgraph_code[node / 4][node % 4] = PackGraphCode(instruction);
         Put(uniforms.vgraph_value[node], instruction.value.x, instruction.value.y, instruction.value.z, instruction.value.w);
     }
     for (size_t slot = 0; slot < material.shaderUniforms.size(); ++slot) {
@@ -194,8 +217,14 @@ void PutVertexGraph(oe_mesh_vs_graph_t& uniforms, const Material& material, cons
 }
 
 // Pixel format of Texture::texels (bytes R, G, B, A) is RGBA8. Mip levels
-// are box filtered on the CPU so distant textures do not shimmer.
-std::vector<std::vector<uint32_t>> BuildMips(const Texture& tex) {
+// are box filtered on the CPU so distant textures do not shimmer; `srgb` (an SRGB8A8 texture) averages the colors
+// as linear light and encodes the result again, as GPUs filter such textures (alpha is linear either way).
+std::vector<std::vector<uint32_t>> BuildMips(const Texture& tex, bool srgb) {
+    static const std::array<float, 256> kDecoded = [] {
+        std::array<float, 256> table{};
+        for (int i = 0; i < 256; ++i) table[static_cast<size_t>(i)] = SrgbToLinear(static_cast<float>(i) / 255.0f);
+        return table;
+    }();
     std::vector<std::vector<uint32_t>> mips;
     mips.push_back(tex.texels);
     int w = tex.width, h = tex.height;
@@ -206,13 +235,19 @@ std::vector<std::vector<uint32_t>> BuildMips(const Texture& tex) {
         for (int y = 0; y < nh; ++y) {
             for (int x = 0; x < nw; ++x) {
                 uint32_t sum[4] = {0, 0, 0, 0};
+                float light[3] = {0, 0, 0};
                 for (int k = 0; k < 4; ++k) {
                     int sx = std::min(w - 1, x * 2 + (k & 1)), sy = std::min(h - 1, y * 2 + (k >> 1));
                     uint32_t c = src[static_cast<size_t>(sy) * static_cast<size_t>(w) + static_cast<size_t>(sx)];
                     for (int ch = 0; ch < 4; ++ch) sum[ch] += (c >> (8 * ch)) & 0xFF;
+                    for (int ch = 0; srgb && ch < 3; ++ch) light[ch] += kDecoded[(c >> (8 * ch)) & 0xFF];
                 }
                 uint32_t out = 0;
-                for (int ch = 0; ch < 4; ++ch) out |= ((sum[ch] + 2) / 4) << (8 * ch);
+                for (int ch = 0; ch < 4; ++ch) {
+                    const uint32_t value = srgb && ch < 3 ? static_cast<uint32_t>(LinearToSrgb(light[ch] / 4) * 255.0f + 0.5f)
+                                                          : (sum[ch] + 2) / 4;
+                    out |= value << (8 * ch);
+                }
                 dst[static_cast<size_t>(y) * static_cast<size_t>(nw) + static_cast<size_t>(x)] = out;
             }
         }
@@ -354,10 +389,11 @@ bool SameBatchMaterial(const Material& a, const Material& b) {
            a.normalScale == b.normalScale && a.occlusionTexture == b.occlusionTexture && a.occlusionStrength == b.occlusionStrength &&
            a.emissive == b.emissive && a.emissiveIntensity == b.emissiveIntensity && a.emissiveTexture == b.emissiveTexture &&
            a.alphaMode == b.alphaMode && a.alphaCutoff == b.alphaCutoff && a.doubleSided == b.doubleSided && a.additive == b.additive &&
+           a.cullFront == b.cullFront && a.castShadows == b.castShadows && !a.smoothNormals && !b.smoothNormals &&
            a.unlit == b.unlit && a.pixelArt == b.pixelArt && a.fog == b.fog && a.tiling[0] == b.tiling[0] && a.tiling[1] == b.tiling[1] &&
            a.offset[0] == b.offset[0] && a.offset[1] == b.offset[1] && a.shader == b.shader && a.light2DOn == b.light2DOn &&
            a.light2D == b.light2D && a.ambient2D == b.ambient2D && a.flip2D[0] == b.flip2D[0] && a.flip2D[1] == b.flip2D[1] &&
-           !a.mask2DOn && !b.mask2DOn &&
+           !a.mask2DOn && !b.mask2DOn && !(a.shader && a.shader->objectSpace) &&
            std::memcmp(a.shaderUniforms.data(), b.shaderUniforms.data(), sizeof(a.shaderUniforms)) == 0;
 }
 
@@ -365,13 +401,13 @@ bool Batchable(const RenderItem& item, const Submesh& sub) {
     return item.joints.empty() && !item.flat && item.mesh->positions.size() <= kBatchVertices && sub.indexCount <= kBatchIndices;
 }
 
-MeshVertex BatchVertex(const Mesh& m, uint32_t i, const RenderItem& item, const Material& material) {
+MeshVertex BatchVertex(const Mesh& m, uint32_t i, const RenderItem& item, const Material& material, bool linear) {
     MeshVertex v{};
     const Vec3 p = item.world.TransformPoint(m.positions[i]);
     const Vec3 n = item.normalMatrix.TransformDir(i < m.normals.size() ? m.normals[i] : Vec3(0, 1, 0));
     const Vec4 t = i < m.tangents.size() ? m.tangents[i] : Vec4(1, 0, 0, 1);
     const Vec3 tw = item.world.TransformDir(t.xyz());
-    const Vec4 c = i < m.colors.size() ? m.colors[i] : Vec4(1, 1, 1, 1);
+    const Vec4 c = m.VertexColor(i, linear);
     const Vec4 data = (i < m.particleData.size() ? m.particleData[i] : Vec4()) + item.particleInput;
     const Vec4 custom = (i < m.particleCustom.size() ? m.particleCustom[i] : Vec4()) + item.particleCustom;
     const size_t uv = static_cast<size_t>(i) * 2;
@@ -393,7 +429,7 @@ MeshVertex BatchVertex(const Mesh& m, uint32_t i, const RenderItem& item, const 
 // Splits `order` (draw list indices, in drawing order) into single draws and batches; batch geometry
 // is appended to `out`. Only consecutive draws are joined, so the drawing order stays the same.
 std::vector<DrawPiece> PlanBatches(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws,
-                                   const std::vector<size_t>& order, DrawBatches& out, EntityId separate = kNullEntity) {
+                                   const std::vector<size_t>& order, DrawBatches& out, EntityId separate = kNullEntity, bool linear = false) {
     std::vector<DrawPiece> pieces;
     for (size_t i = 0; i < order.size();) {
         const DrawCall& first = draws[order[i]];
@@ -427,7 +463,7 @@ std::vector<DrawPiece> PlanBatches(const std::vector<RenderItem>& items, const s
             const Mesh& m = *it.mesh;
             const Submesh& sub = m.submeshes[dc.submesh];
             const uint32_t base = static_cast<uint32_t>(out.vertices.size() - firstVertex);
-            for (uint32_t v = 0; v < m.positions.size(); ++v) out.vertices.push_back(BatchVertex(m, v, it, dc.material));
+            for (uint32_t v = 0; v < m.positions.size(); ++v) out.vertices.push_back(BatchVertex(m, v, it, dc.material, linear));
             for (uint32_t x = 0; x < sub.indexCount; ++x) out.indices.push_back(base + m.indices[sub.firstIndex + x]);
         }
         batch.mesh.indexCount = static_cast<int>(out.indices.size() - firstIndex);
@@ -511,6 +547,9 @@ struct Targets {
     bool withOutput = false;
     bool hdr = false;
     bool bloom = false;
+    bool beforeGraph = false;
+    sg_image postColor{};
+    sg_view postAtt{}, postTex{};
     bool fxaa = false;
     bool dof = false;
     bool ssr = false;
@@ -532,12 +571,12 @@ struct Targets {
     sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
     sg_view bloomHorizontalAtt{}, bloomHorizontalTex{}, bloomVerticalAtt{}, bloomVerticalTex{};
 
-    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_, bool ssao_, bool ssr_) const {
+    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_, bool ssao_, bool ssr_, bool beforeGraph_) const {
         return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_ && fxaa == fxaa_ && dof == dof_ &&
-               dofMrt == (dof_ && dofMrt_) && ssao == ssao_ && ssr == ssr_;
+               dofMrt == (dof_ && dofMrt_) && ssao == ssao_ && ssr == ssr_ && beforeGraph == beforeGraph_;
     }
 
-    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_, bool ssao_, bool ssr_) {
+    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_, bool ssao_, bool ssr_, bool beforeGraph_) {
         Destroy();
         width = w;
         height = h;
@@ -545,6 +584,12 @@ struct Targets {
         withOutput = output_;
         hdr = hdr_;
         bloom = bloom_;
+        beforeGraph = beforeGraph_;
+        if (beforeGraph) {
+            postColor = MakeAttachmentImage(w, h, kHdrFormat, 1, false, false, "oe-post-scene");
+            postAtt = ColorView(postColor);
+            postTex = TextureView(postColor);
+        }
         fxaa = fxaa_;
         dof = dof_;
         ssr = ssr_;
@@ -640,11 +685,11 @@ struct Targets {
         if (ssrColorTex.id) sg_destroy_view(ssrColorTex);
         if (ssrColor.id) sg_destroy_image(ssrColor);
         for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex,
-                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex, fxaaAtt, fxaaTex,
+                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex, fxaaAtt, fxaaTex, postAtt, postTex,
                           dofDepthAtt, dofDepthMsaaAtt, dofDepthResolveAtt, dofDepthTex, dofHorizontalAtt, dofHorizontalTex, dofVerticalAtt, dofVerticalTex, ssaoDepthAtt, ssaoDepthTex}) {
             if (v.id) sg_destroy_view(v);
         }
-        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical, fxaaColor,
+        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical, fxaaColor, postColor,
                            dofDepth, dofDepthMsaa, dofHorizontal, dofVertical, ssaoDepth}) {
             if (i.id) sg_destroy_image(i);
         }
@@ -693,9 +738,10 @@ struct GpuRenderer::Impl {
     Settings settings;
 
     // Scene pass: [0 settings.msaa, 1 single-sampled (pixel-perfect art frames)]
-    // [0 plain, 1 DOF view-depth, 2 SSR surface MRT][0 opaque, 1 alpha blend, 2 additive][double sided]
-    sg_pipeline meshPips[2][3][3][2]{};
-    sg_pipeline hdrMeshPips[2][3][3][2]{};
+    // [0 plain, 1 DOF view-depth, 2 SSR surface MRT][0 opaque, 1 alpha blend, 2 additive]
+    // [faces: 0 front (back culled), 1 both (double sided), 2 back (front culled: outline shells)], see FaceMode
+    sg_pipeline meshPips[2][3][3][3]{};
+    sg_pipeline hdrMeshPips[2][3][3][3]{};
     sg_pipeline skyPips[2][2][3]{};  // [single][hdr][mrt]: fullscreen skybox background drawn first in the scene pass
     sg_shader skyShd{};
     sg_pipeline linePips[2][3]{}, hdrLinePips[2][3]{};
@@ -703,7 +749,7 @@ struct GpuRenderer::Impl {
     sg_shader bloomShd{};
     int hdrSamples = 1;
     bool hdrSupported = false;
-    sg_pipeline shadowPip{}, shadowPipTwoSided{}, maskDepthPip{}, maskDrawPip{}, compositePip{}, uiPip{};
+    sg_pipeline shadowPip{}, shadowPipTwoSided{}, maskDepthPip{}, maskDrawPip{}, compositePip{}, postScenePip{}, uiPip{};
     sg_shader meshShd{}, shadowShd{}, solidShd{}, lineShd{}, compositeShd{}, uiShd{};
     sg_shader surfaceAuxShd{};
     sg_pipeline surfaceShadow[2]{}, surfaceMask[2][2]{};
@@ -746,12 +792,32 @@ struct GpuRenderer::Impl {
         }
     };
     std::unordered_map<const ShaderGraph*, GraphProgram> graphPrograms;
+    // Post graphs (PostProcess.shader) compiled into their own composite program (GraphPostBody in place
+    // of the interpreter loop of PostGraph). Until it is ready, or when it fails, the interpreter runs it
+    // (graphs up to kMaxInterpretedPostNodes; larger ones are skipped).
+    struct PostProgram {
+        std::weak_ptr<const ShaderGraph> owner;
+        sg_shader shader{};
+        sg_pipeline pipeline{};
+        bool failed = false;
+        std::future<ProgramCode> compiling;
+        void Destroy() {
+            if (pipeline.id) sg_destroy_pipeline(pipeline);
+            if (shader.id) sg_destroy_shader(shader);
+        }
+    };
+    std::unordered_map<const ShaderGraph*, PostProgram> postPrograms;
+    sg_pipeline_desc compositeDesc{};
     std::string compiler;  // device.ShaderCompilerId(); empty = sokol_gfx compiles source
     std::unordered_map<uint32_t, sg_pipeline_desc> graphPipelineDescs;  // standard mesh/surface pipelines by id
 
     std::unordered_map<const Mesh*, GpuMesh> meshes;
     std::unordered_map<const Mesh*, GpuMesh> flatMeshes;
+    std::unordered_map<const Mesh*, GpuMesh> smoothMeshes;  // Material::smoothNormals
+    Vec4 graphViewer;  // the camera of the frame being drawn, for the viewDirection graph input (ShaderViewer)
+    bool meshesLinear = false;  // the mesh buffers hold decoded vertex colors (RenderLights::linear)
     std::unordered_map<const Texture*, GpuTexture> textures;
+    std::unordered_map<const Texture*, GpuTexture> srgbTextures;  // color textures of linear projects (SRGB8A8)
     std::unordered_map<const EnvironmentMap*, GpuEnvironment> environments;
     std::unordered_map<const Texture*, GpuTexture> uiTextures;  // no mips; re-uploaded when Texture::version changes
 
@@ -831,7 +897,7 @@ struct GpuRenderer::Impl {
         for (int single = 0; single < 2; ++single)
         for (int mrt = 0; mrt < 3; ++mrt)
         for (int blend = 0; blend < 3; ++blend) {
-            for (int twoSided = 0; twoSided < 2; ++twoSided) {
+            for (int twoSided = 0; twoSided < 3; ++twoSided) {
                 if ((mrt == 1 && !dofMrtSupported) || (mrt == 2 && !hdrSupported)) continue;
                 if (single && msaa == 1) {
                     meshPips[1][mrt][blend][twoSided] = meshPips[0][mrt][blend][twoSided];
@@ -861,7 +927,7 @@ struct GpuRenderer::Impl {
                     d.colors[0].blend.src_factor_alpha = SG_BLENDFACTOR_ZERO;
                     d.colors[0].blend.dst_factor_alpha = SG_BLENDFACTOR_ONE;
                 }
-                d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
+                d.cull_mode = twoSided == 2 ? SG_CULLMODE_FRONT : twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
                 d.face_winding = SG_FACEWINDING_CCW;
                 d.sample_count = single ? 1 : msaa;
                 viewDepthTarget(d, mrt, blend == 0);
@@ -1054,6 +1120,10 @@ struct GpuRenderer::Impl {
             d.sample_count = 1;
             d.label = "oe-composite";
             compositePip = sg_make_pipeline(&d);
+            compositeDesc = d;  // compiled post graphs get the same pipeline with their own program
+            d.colors[0].pixel_format = kHdrFormat;
+            d.label = "oe-post-scene";
+            postScenePip = sg_make_pipeline(&d);
         }
         {
             sg_pipeline_desc d{};
@@ -1143,7 +1213,7 @@ struct GpuRenderer::Impl {
 
     // `standard` with the material's compiled graph program, or `standard` itself (no graph, failed).
     sg_pipeline GraphPipeline(sg_pipeline standard, const Material& material) {
-        if (!material.shader) return standard;
+        if (!material.shader || !settings.compileGraphs) return standard;
         GraphProgram& program = ProgramFor(material.shader);
         if (program.compiling.valid()) {
             if (program.compiling.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return standard;
@@ -1193,6 +1263,66 @@ struct GpuRenderer::Impl {
         return program;
     }
 
+    // The composite pipeline running `graph` compiled, or none while it compiles or when it failed (the
+    // standard composite pipeline interprets it then).
+    sg_pipeline PostPipeline(const std::shared_ptr<const ShaderGraph>& graph) {
+        if (!settings.compileGraphs) return sg_pipeline{};
+        auto found = postPrograms.find(graph.get());
+        if (found != postPrograms.end() && found->second.owner.expired()) {
+            found->second.Destroy();
+            postPrograms.erase(found);
+            found = postPrograms.end();
+        }
+        const sg_shader_desc& standard = *oe_composite_shader_desc(sg_query_backend());
+        if (found == postPrograms.end()) {
+            PostProgram& program = postPrograms[graph.get()];
+            program.owner = graph;
+            ProgramCode code{StageOf(standard.vertex_func, "vs_4_0"), StageOf(standard.fragment_func, "ps_4_0")};
+            const GraphDialect dialect = sg_query_backend() == SG_BACKEND_D3D11 ? GraphDialect::Hlsl : GraphDialect::Glsl;
+            if (code.vs.source.empty() || code.fs.source.empty() ||
+                !ReplaceFunctionBody(code.fs.source, "PostGraph", GraphPostBody(*graph, dialect))) {
+                program.failed = true;
+                OE_LOG_WARN("gpu", "post graph: no PostGraph source to replace; it is interpreted instead");
+                return sg_pipeline{};
+            }
+            if (compiler.empty()) {  // sokol_gfx compiles the source
+                FinishPost(program, MakeGraphShader(standard, code));
+            } else if (settings.asyncShaders) {  // picked up below once it is ready
+                program.compiling = std::async(std::launch::async, [this, code]() mutable {
+                    CompileProgram(device, compiler, settings.shaderCacheDir, code);
+                    return code;
+                });
+            } else {
+                CompileProgram(device, compiler, settings.shaderCacheDir, code);
+                FinishPost(program, MakeGraphShader(standard, code));
+            }
+            found = postPrograms.find(graph.get());
+        }
+        PostProgram& program = found->second;
+        if (program.compiling.valid()) {
+            if (program.compiling.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return sg_pipeline{};
+            const ProgramCode code = program.compiling.get();
+            FinishPost(program, MakeGraphShader(standard, code));
+            OE_LOG_DEBUG("gpu", "post graph program ready (compiled in the background)");
+        }
+        return program.failed ? sg_pipeline{} : program.pipeline;
+    }
+
+    void FinishPost(PostProgram& program, sg_shader shader) {
+        program.shader = shader;
+        program.failed = !shader.id;
+        if (program.failed) {
+            OE_LOG_WARN("gpu", "a post graph did not compile for the GPU; it is interpreted instead");
+            return;
+        }
+        sg_pipeline_desc d = compositeDesc;
+        d.shader = shader;
+        if (const auto owner = program.owner.lock())
+            if (owner->beforeToneMapping) d.colors[0].pixel_format = kHdrFormat;
+        d.label = "oe-post-graph";
+        program.pipeline = sg_make_pipeline(&d);
+    }
+
     static void FinishGraph(GraphProgram& program, sg_shader mesh, sg_shader aux) {
         program.mesh = mesh;
         program.aux = aux;
@@ -1208,6 +1338,13 @@ struct GpuRenderer::Impl {
         if (code.vs.source.empty() || code.fs.source.empty() ||
             !ReplaceFunctionBody(code.vs.source, "VertexOffset", GraphVertexBody(graph, dialect)) ||
             !ReplaceFunctionBody(code.fs.source, "SurfaceGraph", GraphSurfaceBody(graph, dialect))) {
+            code.vs.source.clear();
+            code.fs.source.clear();
+            return code;
+        }
+        // The light stage lives in programs that shade (mesh_fs calls LightGraph); the others have no LightGraph.
+        const bool shades = code.fs.source.find("LightGraph(") != std::string::npos;
+        if (shades && !ReplaceFunctionBody(code.fs.source, "LightGraph", GraphLightBody(graph, dialect))) {
             code.vs.source.clear();
             code.fs.source.clear();
         }
@@ -1242,13 +1379,22 @@ struct GpuRenderer::Impl {
         if (spotImage.id) sg_destroy_image(spotImage);
         for (auto& kv : graphPrograms) kv.second.Destroy();
         graphPrograms.clear();
+        for (auto& kv : postPrograms) {
+            if (kv.second.compiling.valid()) kv.second.compiling.wait();  // the worker holds `this`
+            kv.second.Destroy();
+        }
+        postPrograms.clear();
         for (auto& kv : meshes) kv.second.Destroy();
         for (auto& kv : flatMeshes) kv.second.Destroy();
+        for (auto& kv : smoothMeshes) kv.second.Destroy();
         for (auto& kv : textures) kv.second.Destroy();
+        for (auto& kv : srgbTextures) kv.second.Destroy();
         for (auto& kv : uiTextures) kv.second.Destroy();
         meshes.clear();
         flatMeshes.clear();
+        smoothMeshes.clear();
         textures.clear();
+        srgbTextures.clear();
         uiTextures.clear();
         offscreen.Destroy();
         planarTarget.Destroy();
@@ -1265,7 +1411,10 @@ struct GpuRenderer::Impl {
     // single: one sample per pixel whatever settings.msaa says (pixel-perfect art frames).
     void PrepareTargets(Targets& t, int w, int h, bool output, const RenderView& view, bool single = false) {
         const PostProcess post = NormalizePostProcess(view.postProcess);
-        const bool hdr = UsesHdr(post), bloom = post.bloom > 0;
+        // Linear lighting keeps the scene in float and encodes it once, in the composite.
+        const PostGraph graph = ResolvePostGraph(post, assets);
+        const bool beforeGraph = graph.graph && graph.graph->beforeToneMapping;
+        const bool hdr = UsesHdr(post) || (assets && assets->LinearColor()) || beforeGraph, bloom = post.bloom > 0;
         if (hdr && !hdrSupported) {
             throw std::runtime_error("GPU HDR effects require filterable, blendable RGBA16F render targets; use the software renderer on this device.");
         }
@@ -1273,8 +1422,10 @@ struct GpuRenderer::Impl {
         if ((dof || post.ssao > 0 || post.ssr > 0) && !dofSupported) {
             throw std::runtime_error("GPU depth of field, SSAO and SSR require renderable R32F targets; use the software renderer on this device.");
         }
-        if (!t.Matches(w, h, output, hdr, bloom, post.fxaa, dof, dofMrtSupported && post.ssr == 0, post.ssao > 0 || post.ssr > 0, post.ssr > 0))
-            t.Create(w, h, single ? 1 : (hdr ? hdrSamples : settings.msaa), output, hdr, bloom, post.fxaa, dof, dofMrtSupported && post.ssr == 0, post.ssao > 0 || post.ssr > 0, post.ssr > 0);
+        // FXAA and a post graph both read neighbours of the quantized display image (Targets::fxaa: that image exists).
+        const bool displaySource = post.fxaa || (graph.graph && !beforeGraph);
+        if (!t.Matches(w, h, output, hdr, bloom, displaySource, dof, dofMrtSupported && post.ssr == 0, post.ssao > 0 || post.ssr > 0, post.ssr > 0, beforeGraph))
+            t.Create(w, h, single ? 1 : (hdr ? hdrSamples : settings.msaa), output, hdr, bloom, displaySource, dof, dofMrtSupported && post.ssr == 0, post.ssao > 0 || post.ssr > 0, post.ssr > 0, beforeGraph);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -1293,13 +1444,23 @@ struct GpuRenderer::Impl {
         };
         sweep(meshes);
         sweep(flatMeshes);
+        sweep(smoothMeshes);
         sweep(textures);
+        sweep(srgbTextures);
         sweep(uiTextures);
         sweep(environments);
         for (auto it = graphPrograms.begin(); it != graphPrograms.end();) {
             if (it->second.owner.expired()) {
                 it->second.Destroy();
                 it = graphPrograms.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = postPrograms.begin(); it != postPrograms.end();) {
+            if (it->second.owner.expired() && !it->second.compiling.valid()) {
+                it->second.Destroy();
+                it = postPrograms.erase(it);
             } else {
                 ++it;
             }
@@ -1330,9 +1491,11 @@ struct GpuRenderer::Impl {
     }
 
     // `flat` expands every triangle to its own vertices with the face normal
-    // (the software renderer's flat shading), keeping the index ranges of submeshes.
-    const GpuMesh& MeshFor(const std::shared_ptr<const oe::Mesh>& mesh, bool flat) {
-        auto& map = flat ? flatMeshes : meshes;
+    // (the software renderer's flat shading), keeping the index ranges of submeshes; `smooth` uses
+    // Mesh::SmoothNormals instead of the normals (Material::smoothNormals).
+    const GpuMesh& MeshFor(const std::shared_ptr<const oe::Mesh>& mesh, bool flat, bool smooth = false) {
+        auto& map = smooth ? smoothMeshes : flat ? flatMeshes : meshes;
+        flat = flat && !smooth;
         auto found = map.find(mesh.get());
         if (found != map.end() && OwnerAlive(found->second.permanent, found->second.owner)) return found->second;
         if (found != map.end()) {
@@ -1344,7 +1507,7 @@ struct GpuRenderer::Impl {
         std::vector<uint32_t> indices;
         auto vertex = [&](uint32_t i, const Vec3& n) {
             MeshVertex v{};
-            const Vec4 color = i < m.colors.size() ? m.colors[i] : Vec4(1, 1, 1, 1);
+            const Vec4 color = m.VertexColor(i, meshesLinear);
             const Vec4 data = i < m.particleData.size() ? m.particleData[i] : Vec4();
             Put(v.color, color.x, color.y, color.z, color.w);
             Put(v.particle, data.x, data.y, data.z, data.w);
@@ -1387,8 +1550,10 @@ struct GpuRenderer::Impl {
             }
         } else {
             verts.reserve(m.positions.size());
+            const std::vector<Vec3> smoothNormals = smooth ? m.SmoothNormals() : std::vector<Vec3>();
+            const std::vector<Vec3>& normals = smooth ? smoothNormals : m.normals;
             for (size_t i = 0; i < m.positions.size(); ++i) {
-                verts.push_back(vertex(static_cast<uint32_t>(i), i < m.normals.size() ? m.normals[i] : Vec3(0, 1, 0)));
+                verts.push_back(vertex(static_cast<uint32_t>(i), i < normals.size() ? normals[i] : Vec3(0, 1, 0)));
             }
             indices = m.indices;
         }
@@ -1413,29 +1578,36 @@ struct GpuRenderer::Impl {
         return map[mesh.get()] = g;
     }
 
-    // Mipmapped GPU copy of a material texture; empty view when there is none.
-    sg_view TextureFor(const std::shared_ptr<const Texture>& owner) {
+    // Mipmapped GPU copy of a material texture; empty view when there is none. `srgb`: an SRGB8A8 copy, which the
+    // sampler decodes to linear light before filtering (ColorTextureFor); a texture used both ways has both copies.
+    sg_view TextureFor(const std::shared_ptr<const Texture>& owner, bool srgb = false) {
         const Texture* tex = owner.get();
         if (!tex || tex->width <= 0 || tex->height <= 0) return sg_view{};
-        auto found = textures.find(tex);
-        if (found != textures.end() && OwnerAlive(found->second.permanent, found->second.owner)) return found->second.view;
-        if (found != textures.end()) {
+        auto& map = srgb ? srgbTextures : textures;
+        auto found = map.find(tex);
+        if (found != map.end() && OwnerAlive(found->second.permanent, found->second.owner)) return found->second.view;
+        if (found != map.end()) {
             found->second.Destroy();
-            textures.erase(found);
+            map.erase(found);
         }
-        std::vector<std::vector<uint32_t>> mips = BuildMips(*tex);
+        std::vector<std::vector<uint32_t>> mips = BuildMips(*tex, srgb);
         sg_image_desc d{};
         d.width = tex->width;
         d.height = tex->height;
-        d.pixel_format = kColorFormat;
+        d.pixel_format = srgb ? SG_PIXELFORMAT_SRGB8A8 : kColorFormat;
         d.num_mipmaps = static_cast<int>(mips.size());
         for (size_t i = 0; i < mips.size(); ++i) d.data.mip_levels[i] = {mips[i].data(), mips[i].size() * sizeof(uint32_t)};
-        d.label = "oe-texture";
+        d.label = srgb ? "oe-texture-srgb" : "oe-texture";
         GpuTexture g;
         g.image = sg_make_image(&d);
         g.view = TextureView(g.image);
         g.owner = owner;
-        return (textures[tex] = g).view;
+        return (map[tex] = g).view;
+    }
+    // A texture in a color slot (base, emissive, decals): decoded by the sampler in a linear project
+    // (Texture::Decoded), as stored otherwise.
+    sg_view ColorTextureFor(const std::shared_ptr<const Texture>& owner, bool linear) {
+        return TextureFor(owner, owner && owner->Decoded(linear));
     }
 
     // GPU copy of an environment image (its blur levels as mip levels); the white texture when there is none.
@@ -1521,8 +1693,10 @@ struct GpuRenderer::Impl {
         }
     }
 
-    void ApplySurface(const DrawCall& draw, const RenderItem& item, const MeshBinding& mesh,
-                      const Mat4& viewProj, float time, float cutoff, bool depthOut = false) {
+    // `pipeline` is the one in use (GraphPipeline of the standard surface pipeline `standard`).
+    void ApplySurface(const DrawCall& draw, const RenderItem& item, const MeshBinding& mesh, const Mat4& viewProj,
+                      float time, float cutoff, sg_pipeline pipeline, sg_pipeline standard, bool depthOut = false) {
+        const bool compiled = pipeline.id != standard.id;
         const Material& material = draw.material;
         oe_mesh_vs_params_t vertex{};
         Put(vertex.view_proj, viewProj);
@@ -1533,17 +1707,17 @@ struct GpuRenderer::Impl {
         sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vertex));
         ApplySkin(UB_oe_mesh_vs_skin, item, static_cast<int>(draw.submesh));
         oe_mesh_vs_graph_t vertexGraph{};
-        PutVertexGraph(vertexGraph, material, item, time);
+        PutVertexGraph(vertexGraph, material, item, time, graphViewer, compiled);
         sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vertexGraph));
         oe_mesh_material_t uniforms{};
-        const sg_view texture = TextureFor(material.baseTexture);
+        const sg_view texture = ColorTextureFor(material.baseTexture, meshesLinear);
         Put(uniforms.base_color, material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
         Put(uniforms.flags, 0, texture.id ? 1.0f : 0.0f, cutoff, material.doubleSided ? 1.0f : 0.0f);
         Put(uniforms.uv_rect, item.uvOffset[0], item.uvOffset[1], item.uvScale[0], item.uvScale[1]);
         Put(uniforms.uv_tiling, material.tiling[0], material.tiling[1], material.offset[0], material.offset[1]);
         Put(uniforms.emissive, 0, 0, 0, item.flat ? 1.0f : 0.0f);
         Put(uniforms.color_range, 0, depthOut ? 1.0f : 0.0f, 0, 0);
-        PutGraph(uniforms, material, time);
+        PutGraph(uniforms, material, time, graphViewer, compiled, false);
         sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(uniforms));
         sg_bindings bindings{};
         Bind(bindings, mesh);
@@ -1611,6 +1785,7 @@ struct GpuRenderer::Impl {
 
     RenderStats Frame(const Scene& scene, const RenderView& view, Targets& t, int outW, int outH, const sg_swapchain* swapchain) {
         auto start = std::chrono::steady_clock::now();
+        graphViewer = ShaderViewer(view);
         RenderStats stats;
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view, view.shaderTime, view.pixelStep);
@@ -1625,6 +1800,13 @@ struct GpuRenderer::Impl {
         const std::vector<RenderDecal> decals = GatherDecals(scene,assets,view);
         const std::shared_ptr<const Texture> decalPicture = decalAtlas.Prepare(decals);
         RenderLights lights = GatherRenderLights(scene, assets);
+        if (lights.linear != meshesLinear) {  // the color space changed (another project): rebuild the vertex colors
+            for (auto* map : {&meshes, &flatMeshes, &smoothMeshes}) {
+                for (auto& kv : *map) kv.second.Destroy();
+                map->clear();
+            }
+            meshesLinear = lights.linear;
+        }
         const LocalShadowSet localShadows = SelectLocalShadows(lights, view.proj * view.view, view.eye);
         if (!localShadows.maps.empty() && !localShadowAtlas.id) {
             localShadowAtlas = MakeAttachmentImage(kLocalShadowAtlasSize, kLocalShadowAtlasSize, kDepthFormat, 1,
@@ -1638,9 +1820,10 @@ struct GpuRenderer::Impl {
             lights.groundAmbient = Color(std::max(lights.groundAmbient.r, view.editorFill), std::max(lights.groundAmbient.g, view.editorFill),
                                          std::max(lights.groundAmbient.b, view.editorFill));
         }
-        const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &lights, view.playing);
+        const GraphViewInputs graphView = MakeGraphViewInputs(view.proj, t.width, t.height);
+        const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &lights, view.playing, &graphView);
         // Meshes that are gone (blend shape weights changed, assets reloaded) give their buffers back.
-        for (auto* map : {&meshes, &flatMeshes}) {
+        for (auto* map : {&meshes, &flatMeshes, &smoothMeshes}) {
             for (auto it = map->begin(); it != map->end();) {
                 if (OwnerAlive(it->second.permanent, it->second.owner)) { ++it; continue; }
                 it->second.Destroy();
@@ -1653,6 +1836,10 @@ struct GpuRenderer::Impl {
             gpuMeshes.push_back(&MeshFor(it.mesh, it.flat));
             stats.triangles += static_cast<int>(it.mesh->TriangleCount());
         }
+        // Draws whose material asks for smoothed normals use that copy of the mesh.
+        std::vector<const GpuMesh*> drawMeshes(draws.size());
+        for (size_t k = 0; k < draws.size(); ++k)
+            drawMeshes[k] = draws[k].material.smoothNormals ? &MeshFor(items[draws[k].item].mesh, false, true) : gpuMeshes[draws[k].item];
         stats.drawnEntities = static_cast<int>(items.size());
         // Frustum culling: each draw's world box (displaced surfaces widened by their offset margin)
         // against the camera here and against the light in the shadow pass.
@@ -1707,9 +1894,12 @@ struct GpuRenderer::Impl {
             bool inShadow = false;
             if (shadows) for (int cascade = 0; cascade < cascades.count; ++cascade)
                 inShadow = inShadow || BoxInFrustum(cascades.fits[static_cast<size_t>(cascade)].viewProj, drawLo[k], drawHi[k], false);
-            if (shadows && it.castShadows && !it.unlit && !draws[k].blend && inShadow)
+            // Shadows come from opaque surfaces whose material casts them; extra passes (nextPass, outline
+            // shells) only add color.
+            const bool caster = it.castShadows && !it.unlit && !draws[k].blend && draws[k].pass == 0 && draws[k].material.castShadows;
+            if (shadows && caster && inShadow)
                 shadowOrder.push_back(k);
-            if (it.castShadows && !it.unlit && !draws[k].blend) {
+            if (caster) {
                 bool inLocalShadow = false;
                 for (const auto& map : localShadows.maps)
                     inLocalShadow = inLocalShadow || BoxInFrustum(map.viewProj, drawLo[k], drawHi[k]);
@@ -1718,9 +1908,9 @@ struct GpuRenderer::Impl {
             if (inView[k]) sceneOrder.push_back(k);
         }
         DrawBatches batching;
-        const std::vector<DrawPiece> shadowPieces = PlanBatches(items, draws, shadowOrder, batching);
-        const std::vector<DrawPiece> localShadowPieces = PlanBatches(items, draws, localShadowOrder, batching);
-        const std::vector<DrawPiece> scenePieces = PlanBatches(items, draws, sceneOrder, batching, planar.id);
+        const std::vector<DrawPiece> shadowPieces = PlanBatches(items, draws, shadowOrder, batching, kNullEntity, lights.linear);
+        const std::vector<DrawPiece> localShadowPieces = PlanBatches(items, draws, localShadowOrder, batching, kNullEntity, lights.linear);
+        const std::vector<DrawPiece> scenePieces = PlanBatches(items, draws, sceneOrder, batching, planar.id, lights.linear);
         UploadBatches(batching);
         // The item, draw call and geometry of a piece: the draw's own, or its batch's.
         auto piece = [&](const DrawPiece& p, const DrawCall*& dc, const RenderItem*& it, MeshBinding& mesh) {
@@ -1732,7 +1922,7 @@ struct GpuRenderer::Impl {
             } else {
                 dc = &draws[p.draw];
                 it = &items[dc->item];
-                mesh = Binding(*gpuMeshes[dc->item], it->mesh->submeshes[dc->submesh]);
+                mesh = Binding(*drawMeshes[p.draw], it->mesh->submeshes[dc->submesh]);
             }
         };
 
@@ -1747,8 +1937,9 @@ struct GpuRenderer::Impl {
                 const RenderItem& it = *itp;
                 const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                 if (cutout || Displaced(dc.material)) {
-                    Use(GraphPipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0], dc.material));
-                    ApplySurface(dc, it, mesh, shadowViewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
+                    const sg_pipeline standard = surfaceShadow[dc.material.doubleSided ? 1 : 0], pipeline = GraphPipeline(standard, dc.material);
+                    Use(pipeline);
+                    ApplySurface(dc, it, mesh, shadowViewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, pipeline, standard);
                     Draw(mesh);
                     current = -1;
                     continue;
@@ -1828,8 +2019,9 @@ struct GpuRenderer::Impl {
             }
             if (t0 >= t1) return;
             Vec3 p = a + (b - a) * t0, q = a + (b - a) * t1;
-            lineVerts.push_back({{p.x, p.y, p.z}, {c.r, c.g, c.b, alpha}});
-            lineVerts.push_back({{q.x, q.y, q.z}, {c.r, c.g, c.b, alpha}});
+            const Color d = SceneColor(c, lights.linear);
+            lineVerts.push_back({{p.x, p.y, p.z}, {d.r, d.g, d.b, alpha}});
+            lineVerts.push_back({{q.x, q.y, q.z}, {d.r, d.g, d.b, alpha}});
         };
         if (view.drawGrid) {
             const Color gridColor(0.55f, 0.58f, 0.62f);
@@ -1857,14 +2049,16 @@ struct GpuRenderer::Impl {
             pass.label = "oe-scene-depth-prepass";
             sg_begin_pass(&pass);
             for (const DrawCall& dc : draws) {
-                if (dc.blend || !inView[static_cast<size_t>(&dc - draws.data())]) continue;
+                if (dc.blend || dc.pass > 0 || !inView[static_cast<size_t>(&dc - draws.data())]) continue;  // the surface only
                 const RenderItem& it = items[dc.item];
                 const Submesh& sub = it.mesh->submeshes[dc.submesh];
                 const int twoSided = dc.material.doubleSided ? 1 : 0;
                 const bool cutout = dc.material.alphaMode == AlphaMode::Mask;
                 if (cutout || Displaced(dc.material)) {
-                    Use(GraphPipeline(surfaceDepthPip[twoSided], dc.material));
-                    ApplySurface(dc, it, Binding(*gpuMeshes[dc.item], sub), viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
+                    const sg_pipeline pipeline = GraphPipeline(surfaceDepthPip[twoSided], dc.material);
+                    Use(pipeline);
+                    ApplySurface(dc, it, Binding(*drawMeshes[static_cast<size_t>(&dc - draws.data())], sub), viewProj, view.shaderTime,
+                                 cutout ? dc.material.alphaCutoff : 0.0f, pipeline, surfaceDepthPip[twoSided], true);
                 } else {
                     Use(sceneDepthPip[twoSided]);
                     oe_pos_vs_params_t u{};
@@ -1886,7 +2080,7 @@ struct GpuRenderer::Impl {
         {
             sg_pass pass{};
             pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
-            const Color clear = t.hdr ? ClampHdr(view.clearColor) : view.clearColor;
+            const Color clear = t.hdr ? ClampHdr(SceneColor(view.clearColor, lights.linear)) : view.clearColor;
             pass.action.colors[0].clear_value = {clear.r, clear.g, clear.b, 1.0f};
             pass.action.colors[0].store_action = t.msaa > 1 ? SG_STOREACTION_DONTCARE : SG_STOREACTION_STORE;
             pass.action.depth.load_action = SG_LOADACTION_CLEAR;
@@ -1964,7 +2158,8 @@ struct GpuRenderer::Impl {
             Put(lu.eye, view.eye.x, view.eye.y, view.eye.z, 1);
             const PostProcess fog = NormalizePostProcess(view.postProcess);
             Put(lu.ambient_ground, lights.groundAmbient.r, lights.groundAmbient.g, lights.groundAmbient.b, lights.hemisphere ? 1.0f : 0.0f);
-            Put(lu.fog_color, fog.fogColor.r, fog.fogColor.g, fog.fogColor.b, fog.fog);
+            const Color fogColor = SceneColor(fog.fogColor, lights.linear);
+            Put(lu.fog_color, fogColor.r, fogColor.g, fogColor.b, fog.fog);
             Put(lu.fog_range, fog.fogStart, fog.fogEnd, static_cast<float>(lights.spots.size()), static_cast<float>(decals.size()));
             // Camera forward: minus the third row of the view matrix.
             Put(lu.view_axis, -view.view.at(2, 0), -view.view.at(2, 1), -view.view.at(2, 2), 0);
@@ -1986,7 +2181,7 @@ struct GpuRenderer::Impl {
             // Reflection probes of this frame; the slots without one keep the white texture.
             const std::vector<RenderProbe> probes = ActiveProbes(scene, assets, lights, viewProj, view.eye);
             const sg_view spotLightTex = SpotTextureFor(lights, probes, localShadows, planar, decals, view, t.width, t.height);
-            const sg_view decalTexture = TextureFor(decalPicture);
+            const sg_view decalTexture = ColorTextureFor(decalPicture, meshesLinear);
             sg_view probeTex[kMaxProbes];
             Put(lu.probe_count, static_cast<float>(probes.size()), 0, 0, 0);
             const PostProcess ambientPost = NormalizePostProcess(view.postProcess);
@@ -2015,7 +2210,8 @@ struct GpuRenderer::Impl {
                 const Material& m = dc.material;
                 const int blendMode = dc.blend ? (m.additive ? 2 : 1) : 0;
                 const int mrt = t.ssr ? 2 : (t.dofMrt ? 1 : 0), single = t.msaa > 1 ? 0 : 1;
-                sg_pipeline pip = GraphPipeline(t.hdr ? hdrMeshPips[single][mrt][blendMode][m.doubleSided ? 1 : 0] : meshPips[single][mrt][blendMode][m.doubleSided ? 1 : 0], m);
+                const sg_pipeline standardPip = t.hdr ? hdrMeshPips[single][mrt][blendMode][FaceMode(m)] : meshPips[single][mrt][blendMode][FaceMode(m)];
+                sg_pipeline pip = GraphPipeline(standardPip, m);
                 if (pip.id != current.id) {
                     Use(pip);
                     sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
@@ -2027,18 +2223,18 @@ struct GpuRenderer::Impl {
                 Put(vu.normal_mat, it.normalMatrix);
                 Put(vu.item_custom, it.particleCustom.x, it.particleCustom.y, it.particleCustom.z, it.particleCustom.w);
                 Put(vu.item_particle, it.particleInput.x, it.particleInput.y, it.particleInput.z, it.particleInput.w);
-                sg_view base = TextureFor(m.baseTexture);
+                sg_view base = ColorTextureFor(m.baseTexture, meshesLinear);
                 sg_view normal = m.unlit && !m.light2DOn ? sg_view{} : TextureFor(m.normalTexture);
                 // A sprite mask takes the metallic-roughness slot (sprites have no such map; mesh_fs mask2d_alpha).
                 sg_view mr = m.mask2DOn ? TextureFor(m.mask2DTexture) : m.unlit ? sg_view{} : TextureFor(m.metallicRoughnessTexture);
-                sg_view emissive = TextureFor(m.emissiveTexture);
+                sg_view emissive = ColorTextureFor(m.emissiveTexture, meshesLinear);
                 // light2D surfaces are unlit: their light map takes the occlusion slot (mesh_fs light2d_color).
                 sg_view occlusion = m.light2DOn ? (m.light2D ? TextureFor(m.light2D->texture) : sg_view{}) : m.unlit ? sg_view{} : TextureFor(m.occlusionTexture);
                 PutSprite2D(vu, m, occlusion.id != 0, mr.id != 0);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
                 ApplySkin(UB_oe_mesh_vs_skin, it, static_cast<int>(dc.submesh));
                 oe_mesh_vs_graph_t vg{};
-                PutVertexGraph(vg, m, it, view.shaderTime);
+                PutVertexGraph(vg, m, it, view.shaderTime, graphViewer, pip.id != standardPip.id);
                 sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vg));
                 Color em = m.emissive * m.emissiveIntensity;
                 oe_mesh_material_t mu{};
@@ -2054,7 +2250,7 @@ struct GpuRenderer::Impl {
                 Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, it.id == planar.id ? planar.strength : 0, fogMode, (dc.blend ? 1.0f : 0.0f) + (t.ssr ? 2.0f : 0.0f));
                 if (m.light2DOn) Put(mu.maps, normal.id ? 1.0f : 0.0f, 0, emissive.id ? 1.0f : 0.0f, 0);
                 if (m.mask2DOn) mu.maps[1] = 0;
-                PutGraph(mu, m, view.shaderTime);
+                PutGraph(mu, m, view.shaderTime, graphViewer, pip.id != standardPip.id, true);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
                 Bind(b, mesh);
@@ -2142,7 +2338,7 @@ struct GpuRenderer::Impl {
             }
         }
         // Scene color the later effects read: blurred when depth of field is on.
-        const sg_view sceneSource = t.dof ? t.dofVerticalTex : (t.ssr ? t.ssrColorTex : t.sceneTex);
+        sg_view sceneSource = t.dof ? t.dofVerticalTex : (t.ssr ? t.ssrColorTex : t.sceneTex);
 
         // ----- Selection mask (editor): visible pixels of the highlighted entity
         bool outline = false;
@@ -2170,15 +2366,17 @@ struct GpuRenderer::Impl {
                     for (size_t i = 0; i < items.size(); ++i) {
                         if (stage == 1 && items[i].id != view.highlight) continue;
                         bool surfaceAlpha = false;
-                        for (const DrawCall& draw : draws) if (draw.item == i && draw.material.shader)
+                        for (const DrawCall& draw : draws) if (draw.item == i && draw.material.shader && draw.pass == 0)
                             surfaceAlpha = surfaceAlpha || draw.blend || draw.material.alphaMode == AlphaMode::Mask || Displaced(draw.material);
                         if (surfaceAlpha) {
                             for (const DrawCall& draw : draws) {
-                                if (draw.item != i) continue;
-                                Use(GraphPipeline(surfaceMask[stage][draw.material.doubleSided ? 1 : 0], draw.material));
+                                if (draw.item != i || draw.pass > 0) continue;
+                                const sg_pipeline standard = surfaceMask[stage][draw.material.doubleSided ? 1 : 0];
+                                const sg_pipeline pipeline = GraphPipeline(standard, draw.material);
+                                Use(pipeline);
                                 const float cutoff = draw.material.alphaMode == AlphaMode::Mask ? draw.material.alphaCutoff :
                                                      (draw.blend ? 0.5f : 0.0f);
-                                ApplySurface(draw, items[i], Binding(*gpuMeshes[i], items[i].mesh->submeshes[draw.submesh]), viewProj, view.shaderTime, cutoff);
+                                ApplySurface(draw, items[i], Binding(*drawMeshes[static_cast<size_t>(&draw - draws.data())], items[i].mesh->submeshes[draw.submesh]), viewProj, view.shaderTime, cutoff, pipeline, standard);
                                 const Submesh& sub = items[i].mesh->submeshes[draw.submesh];
                                 sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
                             }
@@ -2246,6 +2444,60 @@ struct GpuRenderer::Impl {
         }
         bool haveUI = ui.Write(uiVerts.data(), uiVerts.size() * sizeof(UIVertex));
 
+        auto configurePost = [&](const PostGraph& postGraph, oe_composite_params_t& cu, sg_pipeline& composite) {
+            const ShaderGraph& graph = *postGraph.graph;
+            const sg_pipeline compiled = PostPipeline(postGraph.graph);
+            const bool interpretable = graph.instructions.size() <= static_cast<size_t>(ShaderGraph::kMaxInterpretedPostNodes);
+            stats.postGraph = compiled.id ? "compiled" : interpretable ? "interpreted" : "skipped";
+            if (compiled.id || interpretable) {
+                Put(cu.post_graph, static_cast<float>(graph.instructions.size()), static_cast<float>(graph.color),
+                    graph.beforeToneMapping ? 1.0f : 0.0f, view.shaderTime);
+                if (compiled.id) {
+                    composite = compiled;
+                } else {
+                    for (size_t node = 0; node < graph.instructions.size(); ++node) {
+                        const ShaderInstruction& ins = graph.instructions[node];
+                        Put(cu.post_code[node], static_cast<float>(ins.op), static_cast<float>(ins.args[0]),
+                            static_cast<float>(ins.args[1]), static_cast<float>(ins.args[2]));
+                        Put(cu.post_value[node], ins.value.x, ins.value.y, ins.value.z, ins.value.w);
+                    }
+                }
+                for (size_t slot = 0; slot < postGraph.uniforms.size(); ++slot)
+                    Put(cu.post_uniform[slot], postGraph.uniforms[slot].x, postGraph.uniforms[slot].y,
+                        postGraph.uniforms[slot].z, postGraph.uniforms[slot].w);
+            }
+        };
+
+        // A beforeToneMapping post graph: a full-screen pass from the scene into postColor (RGBA16F), which then
+        // stands in for the scene in bloom and the composite. post_stage.x without FXAA makes DisplayColor return
+        // the raw scene; a graph that cannot run yet (still compiling, too long to interpret) copies it through.
+        if (t.beforeGraph) {
+            const PostGraph graph = ResolvePostGraph(post, assets);
+            oe_composite_params_t cu{};
+            Put(cu.target, static_cast<float>(t.width), static_cast<float>(t.height), 0, 0);
+            Put(cu.post_stage, 1, 0, 1.0f / static_cast<float>(t.width), 1.0f / static_cast<float>(t.height));
+            sg_pipeline pipeline = postScenePip;
+            configurePost(graph, cu, pipeline);
+            sg_pass pass{};
+            pass.action.colors[0].load_action = SG_LOADACTION_DONTCARE;
+            pass.attachments.colors[0] = t.postAtt;
+            pass.label = "oe-post-scene";
+            sg_begin_pass(&pass);
+            Use(pipeline);
+            sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
+            sg_bindings b{};
+            b.views[VIEW_oe_scene_tex] = sceneSource;
+            b.views[VIEW_oe_mask_tex] = whiteTex;
+            b.views[VIEW_oe_bloom_tex] = whiteTex;
+            b.samplers[SMP_oe_scene_smp] = linearClamp;
+            b.samplers[SMP_oe_mask_smp] = nearestClamp;
+            b.samplers[SMP_oe_bloom_smp] = linearClamp;
+            sg_apply_bindings(&b);
+            sg_draw(0, 3, 1);
+            sg_end_pass();
+            sceneSource = t.postTex;
+        }
+
         // Two separable passes: horizontal highlight extraction/blur, then vertical
         // blur. UI and the selection mask are never sampled for bloom.
         if (t.bloom) for (int stage = 0; stage < 2; ++stage) {
@@ -2266,7 +2518,9 @@ struct GpuRenderer::Impl {
             sg_end_pass();
         }
 
-        // Quantize display color before FXAA, matching the software renderer's RGBA8 source.
+        // Linear lighting: the composite encodes the float scene as sRGB after tone mapping (ColorSpace.h).
+        const float linearOut = t.hdr && lights.linear ? 1.0f : 0.0f;
+        // Quantize display color before FXAA/the post graph, matching the software renderer's RGBA8 source.
         if (t.fxaa) {
             sg_pass pass{};
             pass.action.colors[0].load_action = SG_LOADACTION_DONTCARE;
@@ -2277,8 +2531,9 @@ struct GpuRenderer::Impl {
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(t.width), static_cast<float>(t.height), 0, 0);
             Put(cu.bloom_strength, post.bloom, 0, 0, 0);
-            Put(cu.tone_mapping, post.exposure, ToneMappingMode(post), 0, 0);
+            Put(cu.tone_mapping, post.exposure, ToneMappingMode(post), linearOut, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            Put(cu.vignette_color, post.vignetteColor.r, post.vignetteColor.g, post.vignetteColor.b, 0);
             Put(cu.grade_shadow, post.shadowTint.r, post.shadowTint.g, post.shadowTint.b, UsesGrading(post) ? 1.0f : 0.0f);
             Put(cu.grade_high, post.highlightTint.r, post.highlightTint.g, post.highlightTint.b, 0);
             Put(cu.grade_params, post.saturation, post.contrast, 0, 0);
@@ -2303,18 +2558,26 @@ struct GpuRenderer::Impl {
             else pass.attachments.colors[0] = t.outputAtt;
             pass.label = "oe-composite";
             sg_begin_pass(&pass);
-            Use(compositePip);
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(outW), static_cast<float>(outH), 0, 0);
             Put(cu.outline_color, kOutlineColor.r, kOutlineColor.g, kOutlineColor.b, outline ? 1.0f : 0.0f);
             Put(cu.bloom_strength, post.bloom, 0, 0, 0);
-            Put(cu.tone_mapping, post.exposure, ToneMappingMode(post), 0, 0);
+            Put(cu.tone_mapping, post.exposure, ToneMappingMode(post), linearOut, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            Put(cu.vignette_color, post.vignetteColor.r, post.vignetteColor.g, post.vignetteColor.b, 0);
             Put(cu.grade_shadow, post.shadowTint.r, post.shadowTint.g, post.shadowTint.b, UsesGrading(post) ? 1.0f : 0.0f);
             Put(cu.grade_high, post.highlightTint.r, post.highlightTint.g, post.highlightTint.b, 0);
             Put(cu.grade_params, post.saturation, post.contrast, 0, 0);
-            Put(cu.post_stage, t.fxaa ? 1.0f : 0.0f, t.fxaa ? 1.0f : 0.0f,
+            Put(cu.post_stage, t.fxaa ? 1.0f : 0.0f, t.fxaa && post.fxaa ? 1.0f : 0.0f,
                 1.0f / static_cast<float>(t.width), 1.0f / static_cast<float>(t.height));
+            // The post graph runs in its own compiled composite program; until that is ready (or if it
+            // failed) composite_fs interprets it from its instructions as uniforms, up to kMaxInterpretedPostNodes.
+            const PostGraph postGraph = ResolvePostGraph(post, assets);
+            sg_pipeline composite = compositePip;
+            if (t.fxaa && postGraph.graph && !postGraph.graph->beforeToneMapping) {
+                configurePost(postGraph, cu, composite);
+            }
+            Use(composite);
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
             b.views[VIEW_oe_scene_tex] = t.fxaa ? t.fxaaTex : sceneSource;
@@ -2464,23 +2727,31 @@ void GpuRenderer::CollectGarbage() { impl_->Evict(); }
 void GpuRenderer::Preload(const std::vector<std::shared_ptr<const Material>>& materials,
                           const std::vector<std::shared_ptr<const Texture>>& textures,
                           const std::vector<std::shared_ptr<const Mesh>>& meshes) {
-    for (const auto& texture : textures) impl_->TextureFor(texture);
+    // Loose textures are most likely color images; a data use uploads its own copy when it is drawn.
+    const bool linear = impl_->assets && impl_->assets->LinearColor();
+    for (const auto& texture : textures) impl_->ColorTextureFor(texture, linear);
     for (const auto& mesh : meshes)
         if (mesh && !mesh->positions.empty()) impl_->MeshFor(mesh, false);
     for (const auto& material : materials) {
         if (!material) continue;
-        for (const auto& texture : {material->baseTexture, material->normalTexture, material->metallicRoughnessTexture,
-                                    material->emissiveTexture, material->occlusionTexture})
+        for (const auto& texture : {material->normalTexture, material->metallicRoughnessTexture, material->occlusionTexture})
             impl_->TextureFor(texture);
-        if (!material->shader) continue;
+        for (const auto& texture : {material->baseTexture, material->emissiveTexture}) impl_->ColorTextureFor(texture, linear);
+        // The material's own graph and the outline graph its shell draws with.
+        std::vector<Material> graphs;
+        if (material->shader) graphs.push_back(*material);
+        if (material->outlineWidth > 0.0f) graphs.push_back(OutlineMaterial(*material));
+        for (const Material* next = material->nextPass.get(); next; next = next->nextPass.get())
+            if (next->shader) graphs.push_back(*next);
         // Every way the scene pass can draw it: a particle or a sprite blends a material that is opaque
         // on a mesh, and the targets depend on the camera's effects.
-        for (auto* pipelines : {&impl_->meshPips, &impl_->hdrMeshPips})
-            for (auto& bySamples : *pipelines)
-                for (auto& byBlend : bySamples)
-                    for (auto& bySide : byBlend)
-                        for (sg_pipeline standard : bySide)
-                            if (standard.id) impl_->GraphPipeline(standard, *material);
+        for (const Material& graph : graphs)
+            for (auto* pipelines : {&impl_->meshPips, &impl_->hdrMeshPips})
+                for (auto& bySamples : *pipelines)
+                    for (auto& byBlend : bySamples)
+                        for (auto& bySide : byBlend)
+                            for (sg_pipeline standard : bySide)
+                                if (standard.id) impl_->GraphPipeline(standard, graph);
     }
 }
 

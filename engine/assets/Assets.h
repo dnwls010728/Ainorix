@@ -92,6 +92,15 @@ public:
     void DeferProbeEdits(bool on) { deferProbeEdits_ = on; }
     bool ProbesStale() const { return probesStale_; }
 
+    // Color space of the project (project.json "rendering": {"colorSpace"}, render/ColorSpace.h): with linear
+    // lighting the renderers decode authored colors and color textures, and 8-bit environment images are
+    // decoded when they load (an .hdr image is linear already). Changing it drops the environments.
+    void SetLinearColor(bool linear) {
+        if (linear != linearColor_) environments_.clear();
+        linearColor_ = linear;
+    }
+    bool LinearColor() const { return linearColor_; }
+
     // Reloads assets whose files changed; returns their paths.
     std::vector<std::string> PollChanges();
     void Clear();
@@ -108,7 +117,7 @@ private:
         std::shared_ptr<const T> asset;
         std::string error;
         int64_t mtime = 0;
-        int64_t eventsMtime = 0;  // model event sidecar, including creation/deletion
+        int64_t sidecarMtime = 0;  // <file>.events.json of a model, <file>.texture.json of an image (creation/deletion too)
         std::map<std::string, int64_t> dependencies;  // model clips sidecar and external sources
     };
     Entry<Mesh> LoadMesh(const std::string& path);
@@ -133,10 +142,12 @@ private:
     std::map<std::string, Entry<Mesh>> meshes_;
     std::map<std::string, Entry<Texture>> textures_;
     std::map<std::string, Entry<EnvironmentMap>> environments_;
+    bool linearColor_ = false;
     std::map<EntityId, std::shared_ptr<const EnvironmentMap>> probes_;
     bool deferProbeEdits_ = false, probesStale_ = false;
     const Scene* probeScene_ = nullptr;
     std::map<std::string, Entry<Material>> materials_;
+    std::vector<std::string> materialsLoading_;  // the nextPass chain being loaded (cycle detection)
     std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;
     std::map<std::string, Entry<Json>> animations_;

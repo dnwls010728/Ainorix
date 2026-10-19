@@ -33,6 +33,9 @@ public:
         // Shader graph programs compile on worker threads; until one is ready its materials draw
         // with the interpreter (same image, slower shader). Off: compiled on first use (tests, screenshots).
         bool asyncShaders = false;
+        // Off: shader graphs are never compiled, every one runs through the interpreters (checks that fallback;
+        // graphs above ShaderGraph::kMaxInterpretedSurfaceNodes / kMaxInterpretedPostNodes are then skipped).
+        bool compileGraphs = true;
     };
 
     // Calls sg_setup() with the device's environment; the device must outlive the renderer.

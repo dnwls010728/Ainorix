@@ -28,7 +28,11 @@ const FieldDoc kFields[] = {
     {"emissiveTexture", "Image multiplied with emissive"},
     {"alphaMode", "opaque | mask (cut out below alphaCutoff) | blend (transparent)"},
     {"alphaCutoff", "Threshold for mask"},
-    {"doubleSided", "Draw back faces too (leaves, cloth, glass panes)"},
+    {"doubleSided", "Draw back faces too (leaves, cloth, glass panes); the same as cull none"},
+    {"cull", "Faces not drawn: back (default), front (only back faces: inverted-hull outlines) or none (both faces)"},
+    {"castShadows", "false: never drawn into shadow maps (default true)"},
+    {"smoothNormals", "true: vertex normals averaged where vertices share a position (hard edges, uv seams), so shells pushed out along them stay closed"},
+    {"nextPass", "Another *.mat.json drawn on the same mesh right after this one (outline shells, glows); empty = none"},
     {"unlit", "Ignore lights: color = base (+ emissive)"},
     {"pixelArt", "Nearest-neighbour texture sampling"},
     {"fog", "Affected by the camera's PostProcess fog (default true; false for sky domes and backdrops)"},
@@ -36,6 +40,9 @@ const FieldDoc kFields[] = {
     {"offset", "UV offset [x,y]"},
     {"shader", "Project-relative *.shader.json surface graph (empty disables it)"},
     {"shaderUniforms", "Named scalar/four-vector overrides of graph uniform defaults"},
+    {"outlineWidth", "Outline drawn around the surface (inverted hull): world units 0..0.25, or pixels 0..16 with outlineUnits pixels; 0 = none"},
+    {"outlineColor", "Outline color, [r,g,b] or \"#rrggbb\" (unlit)"},
+    {"outlineUnits", "\"world\" (default: thinner when far away) or \"pixels\" (the same thickness on screen at any distance)"},
 };
 
 bool ReadColor(const Json& v, Color& c) {
@@ -69,7 +76,7 @@ const char* ToString(AlphaMode mode) {
 }
 
 bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Material& out, std::string* error,
-                      const ShaderLoader& loadShader) {
+                      const ShaderLoader& loadShader, const MaterialLoader& loadMaterial) {
     auto fail = [&](const std::string& msg) {
         if (error) *error = msg;
         return false;
@@ -128,6 +135,19 @@ bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Materi
             else ok = fail("'alphaMode' must be \"opaque\", \"mask\" or \"blend\"");
         } else if (k == "alphaCutoff") ok = number(m.alphaCutoff);
         else if (k == "doubleSided") ok = boolean(m.doubleSided);
+        else if (k == "cull") {
+            const std::string cull = v.asString("");
+            if (cull == "back") m.cullFront = false;
+            else if (cull == "front") m.cullFront = true, m.doubleSided = false;
+            else if (cull == "none") m.doubleSided = true, m.cullFront = false;
+            else ok = fail("cull must be \"back\", \"front\" or \"none\"");
+        }
+        else if (k == "castShadows") ok = boolean(m.castShadows);
+        else if (k == "smoothNormals") ok = boolean(m.smoothNormals);
+        else if (k == "nextPass") {
+            if (!v.isString()) ok = fail("nextPass must be a *.mat.json path");
+            else m.nextPassPath = v.asString();
+        }
         else if (k == "unlit") ok = boolean(m.unlit);
         else if (k == "pixelArt") ok = boolean(m.pixelArt);
         else if (k == "fog") ok = boolean(m.fog);
@@ -138,11 +158,23 @@ bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Materi
             else m.shaderPath = v.asString();
         }
         else if (k == "shaderUniforms") ok = v.isObject() || fail("'shaderUniforms' must be an object");
+        else if (k == "outlineWidth") ok = number(m.outlineWidth);  // range checked below, it depends on outlineUnits
+        else if (k == "outlineColor") ok = color(m.outlineColor);
+        else if (k == "outlineUnits") {
+            const std::string units = v.asString("");
+            if (units == "pixels") m.outlinePixels = true;
+            else if (units != "world") ok = fail("'outlineUnits' must be \"world\" or \"pixels\"");
+        }
         else ok = fail("unknown material field '" + k + "'");
         if (!ok) {
             if (error && error->empty()) *error = "'" + k + "' has the wrong type";
             return false;
         }
+    }
+    if (!m.nextPassPath.empty()) {
+        std::string passError;
+        m.nextPass = loadMaterial ? loadMaterial(m.nextPassPath, &passError) : nullptr;
+        if (!m.nextPass) return fail("nextPass: " + (passError.empty() ? "no material loader for " + m.nextPassPath : passError));
     }
     if (!m.shaderPath.empty()) {
         std::string shaderError;
@@ -152,6 +184,9 @@ bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Materi
     } else if (json["shaderUniforms"].isObject() && json["shaderUniforms"].size() != 0) {
         return fail("'shaderUniforms' requires a shader");
     }
+    const float maxOutline = m.outlinePixels ? kMaxOutlinePixels : kMaxOutlineWidth;
+    if (!(m.outlineWidth >= 0.0f && m.outlineWidth <= maxOutline))
+        return fail(m.outlinePixels ? "'outlineWidth' must be between 0 and 16 (pixels)" : "'outlineWidth' must be between 0 and 0.25 (world units)");
     m.opacity = Clamp(m.opacity, 0.0f, 1.0f);
     m.metallic = Clamp(m.metallic, 0.0f, 1.0f);
     m.roughness = Clamp(m.roughness, 0.0f, 1.0f);
@@ -180,6 +215,10 @@ Json DefaultMaterialJson() {
     j["alphaMode"] = ToString(d.alphaMode);
     j["alphaCutoff"] = d.alphaCutoff;
     j["doubleSided"] = d.doubleSided;
+    j["cull"] = "back";
+    j["castShadows"] = d.castShadows;
+    j["smoothNormals"] = d.smoothNormals;
+    j["nextPass"] = "";
     j["unlit"] = d.unlit;
     j["pixelArt"] = d.pixelArt;
     j["fog"] = d.fog;
@@ -187,6 +226,9 @@ Json DefaultMaterialJson() {
     j["offset"] = Json(Json::Array{0, 0});
     j["shader"] = "";
     j["shaderUniforms"] = Json::MakeObject();
+    j["outlineWidth"] = d.outlineWidth;
+    j["outlineColor"] = Json(Json::Array{d.outlineColor.r, d.outlineColor.g, d.outlineColor.b});
+    j["outlineUnits"] = "world";
     return j;
 }
 

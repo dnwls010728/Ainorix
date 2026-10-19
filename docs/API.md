@@ -1907,12 +1907,12 @@ Physics backend, gravity, body counts and warnings (e.g. invalid shapes).
 
 ### `shader.create`
 
-Create a validated portable surface shader graph (*.shader.json).
+Create a validated portable shader graph (*.shader.json): a material surface, or with "stage": "post" a PostProcess.shader; injection: afterToneMapping (default display image) or beforeToneMapping (HDR scene before bloom).
 
 | arg | type | required | description |
 |---|---|---|---|
 | `path` | string | yes | Project-relative .shader.json file. |
-| `graph` | object | yes | Ordered nodes, color output, optional emissive/normal/offset outputs and named uniform defaults. |
+| `graph` | object | yes | Ordered nodes, color output, optional emissive/normal/offset/light outputs (surface only; light is added per light from lightVector/lightColor/lightAttenuation), named uniform defaults, optional stage. |
 | `overwrite` | boolean |  | Replace an existing graph. |
 
 ### `shader.check`
@@ -1927,7 +1927,7 @@ Validate a surface shader graph and list its instructions/outputs/uniform names.
 
 ### `material.create`
 
-Create a material file (*.mat.json): PBR baseColor/opacity/metallic/roughness, base/normal/metallicRoughness/occlusion/emissive textures, alphaMode (opaque, mask, blend), doubleSided, unlit, tiling. Assign it with MeshRenderer.material.
+Create a material file (*.mat.json): PBR baseColor/opacity/metallic/roughness, base/normal/metallicRoughness/occlusion/emissive textures, alphaMode (opaque, mask, blend), doubleSided/cull, castShadows, smoothNormals, nextPass (another material drawn afterwards), unlit, tiling, outlineWidth/outlineColor/outlineUnits (toon outline). Assign it with MeshRenderer.material.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -2558,6 +2558,7 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 | `vignette` | float | `0` | Edge darkening strength: 0 disables, 1 is fully dark outside the transition. |
 | `vignetteRadius` | float | `0.75` | Normalized radius: center 0, edge midpoint 1, corner sqrt(2). |
 | `vignetteSoftness` | float | `0.5` | Smooth transition width in normalized screen coordinates (minimum 0.01). |
+| `vignetteColor` | color | `[0,0,0]` | Color the edges blend toward (multiplied in): black darkens, a warm brown gives a sepia/painted edge. |
 | `dofRadius` | int | `0` | Depth of field: largest blur radius in scene pixels (0..16) for surfaces far from dofFocus. 0 disables it. |
 | `dofFocus` | float | `10` | Depth of field: distance in front of the camera, in meters, that is sharp. |
 | `dofRange` | float | `2` | Depth of field: depth on either side of dofFocus that stays fully sharp. |
@@ -2570,6 +2571,8 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 | `contrast` | float | `1` | Color grading: contrast around mid grey 0.5; 1 = unchanged. |
 | `shadowTint` | color | `[1,1,1]` | Color grading: multiplier for dark tones (split toning, e.g. cool shadows). White = unchanged. |
 | `highlightTint` | color | `[1,1,1]` | Color grading: multiplier for bright tones (e.g. warm highlights). White = unchanged. |
+| `shader` | string | `""` | Post graph: a *.shader.json with "stage": "post" run last on the display image (sceneColor/sceneBlur at uv, noise, fbm). Empty = none. A missing or invalid graph is skipped with a log warning; check it with shader.check. |
+| `shaderUniforms` | json | `{}` | Values for the post graph's uniforms: {name: number or [x, y, z, w]}; unnamed uniforms keep the graph's defaults. Scripts can change them every frame. |
 
 ### Light2D
 

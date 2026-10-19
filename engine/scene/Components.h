@@ -746,7 +746,8 @@ struct PostProcess {
     float vignette = 0.0f;          // edge darkening strength; zero disables the effect
     float vignetteRadius = 0.75f;   // normalized distance from screen center
     float vignetteSoftness = 0.5f;  // smooth transition width
-    int dofRadius = 0;             // largest depth-of-field blur radius in scene pixels; zero disables it
+    Color vignetteColor{0, 0, 0};   // what the edges blend toward; black = plain darkening
+    int dofRadius = 0;            // largest depth-of-field blur radius in scene pixels; zero disables it
     float dofFocus = 10.0f;        // view depth in meters that is sharp
     float dofRange = 2.0f;         // depth on either side of dofFocus that stays sharp
     float dofFalloff = 8.0f;       // further depth over which the blur grows to dofRadius
@@ -758,6 +759,10 @@ struct PostProcess {
     float contrast = 1.0f;
     Color shadowTint{1, 1, 1};
     Color highlightTint{1, 1, 1};
+    // Post graph: a `"stage": "post"` *.shader.json run last on the display image (after grading and vignette);
+    // empty = none. shaderUniforms override its uniform defaults.
+    std::string shader;
+    Json shaderUniforms = Json::MakeObject();
     static void Reflect(FieldList& f) {
         FieldInfo& exposureField = f.Add("exposure", &PostProcess::exposure, "Scene brightness multiplier before tone mapping. 1 preserves brightness.");
         exposureField.hasRange = true; exposureField.min = 0; exposureField.max = 32;
@@ -789,6 +794,8 @@ struct PostProcess {
         radius.hasRange = true; radius.min = 0; radius.max = 1.5f;
         FieldInfo& softness = f.Add("vignetteSoftness", &PostProcess::vignetteSoftness, "Smooth transition width in normalized screen coordinates (minimum 0.01).");
         softness.hasRange = true; softness.min = 0.01f; softness.max = 2;
+        f.Add("vignetteColor", &PostProcess::vignetteColor,
+              "Color the edges blend toward (multiplied in): black darkens, a warm brown gives a sepia/painted edge.");
         FieldInfo& dof = f.Add("dofRadius", &PostProcess::dofRadius,
                                "Depth of field: largest blur radius in scene pixels (0..16) for surfaces far from dofFocus. 0 disables it.");
         dof.hasRange = true; dof.min = 0; dof.max = 16;
@@ -814,6 +821,12 @@ struct PostProcess {
         con.hasRange = true; con.min = 0; con.max = 4;
         f.Add("shadowTint", &PostProcess::shadowTint, "Color grading: multiplier for dark tones (split toning, e.g. cool shadows). White = unchanged.");
         f.Add("highlightTint", &PostProcess::highlightTint, "Color grading: multiplier for bright tones (e.g. warm highlights). White = unchanged.");
+        f.Add("shader", &PostProcess::shader,
+              "Post graph: a *.shader.json with \"stage\": \"post\" run last on the display image (sceneColor/sceneBlur at uv, noise, fbm). "
+              "Empty = none. A missing or invalid graph is skipped with a log warning; check it with shader.check.");
+        f.Add("shaderUniforms", &PostProcess::shaderUniforms,
+              "Values for the post graph's uniforms: {name: number or [x, y, z, w]}; unnamed uniforms keep the graph's defaults. "
+              "Scripts can change them every frame.");
     }
 };
 

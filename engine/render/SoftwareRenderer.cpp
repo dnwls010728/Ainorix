@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "assets/Assets.h"
+#include "render/ColorSpace.h"
 #include "render/Mesh.h"
 #include "render/PostProcess.h"
 #include "render/ScreenReflection.h"
@@ -122,6 +123,7 @@ struct Lighting {
     Mat4 planarViewProj;
     std::vector<RenderDecal> decals;
     std::shared_ptr<const Texture> decalAtlas;
+    bool linear = false;  // RenderLights::linear: the planar picture is display colors (decoded here)
 
     Color PlanarColor(EntityId id, const Vec3& position, const Color& original) const {
         if (id != planar.id || planarTexture.texels.empty()) return original;
@@ -130,7 +132,7 @@ struct Lighting {
         const float u = projected.x / projected.w * 0.5f + 0.5f, v = 0.5f - projected.y / projected.w * 0.5f;
         if (u < 0 || v < 0 || u > 1 || v > 1) return original;
         const float edge = 0.5f / static_cast<float>(planarTexture.width);
-        return original * (1 - planar.strength) + planarTexture.Sample(Clamp(u,edge,1-edge), Clamp(v,edge,1-edge)) * planar.strength;
+        return original * (1 - planar.strength) + SceneColor(planarTexture.Sample(Clamp(u,edge,1-edge), Clamp(v,edge,1-edge)), linear) * planar.strength;
     }
     std::vector<float> ssaoDepth;
     Mat4 ssaoInverse;
@@ -211,6 +213,51 @@ struct Lighting {
         if (blend <= 0) return first;
         const float next = index + 1 < cascades.count ? cascadeMaps[static_cast<size_t>(index + 1)].Lit(position, normal) : 1.0f;
         return Lerp(first, next, blend);
+    }
+
+    // The ambient input of surface graphs: the diffuse ambient light at normal n. Mirrors GraphAmbient in mesh_fs.
+    Color AmbientAt(const Vec3& n) const {
+        if (env.present) return EnvDiffuse(env, n);
+        if (hemisphere) {
+            const float up = n.y * 0.5f + 0.5f;
+            return groundAmbient * (1.0f - up) + ambient * up;
+        }
+        return ambient;
+    }
+
+    // A surface whose graph has a light output shades itself (Godot's light()): `color` (its ambient part,
+    // times ao) plus, for every light, what the graph's light stage gives for that light's vector, color
+    // and attenuation (distance, spot cone, shadow). Mirrors the light-graph branch of mesh_fs.
+    Color ShadeGraph(const ShaderGraph& graph, ShaderInputs inputs, const std::array<Vec4, ShaderGraph::kMaxUniforms>& uniforms,
+                     const Vec3& wpos, const Vec3& ng, const Color& color, float ao) const {
+        Color c = color * ao;
+        auto add = [&](const Vec3& l, const Color& lightColor, float attenuation) {
+            inputs.lightVector = Vec4(l, 0);
+            inputs.lightColor = Vec4(lightColor.r, lightColor.g, lightColor.b, 1);
+            inputs.lightAttenuation = attenuation;
+            const Vec3 added = EvaluateShaderLight(graph, inputs, uniforms);
+            c = c + Color(added.x, added.y, added.z);
+        };
+        for (size_t i = 0; i < dirs.size(); ++i) add(-dirs[i].dir, dirs[i].color, i == 0 ? SunLit(wpos, ng) : 1.0f);
+        for (size_t i = 0; i < points.size(); ++i) {
+            const RenderPointLight& p = points[i];
+            const Vec3 d = p.pos - wpos;
+            const float dist = Length(d);
+            if (dist >= p.range || dist < 1e-5f) continue;
+            const float fall = 1.0f - dist / p.range;
+            add(d / dist, p.color, fall * fall * (p.shadows ? LocalLit(true, i, wpos, ng) : 1.0f));
+        }
+        for (size_t i = 0; i < spots.size(); ++i) {
+            const RenderSpotLight& spot = spots[i];
+            const Vec3 d = spot.pos - wpos;
+            const float dist = Length(d);
+            if (dist >= spot.range || dist < 1e-5f) continue;
+            const float cone = SpotConeWeight(spot, -d / dist);
+            if (cone <= 0.0f) continue;
+            const float fall = 1.0f - dist / spot.range;
+            add(d / dist, spot.color, fall * fall * cone * (spot.shadows ? LocalLit(false, i, wpos, ng) : 1.0f));
+        }
+        return c;
     }
 
     // Metallic-roughness shading (GGX / Smith / Schlick) in the engine's
@@ -337,6 +384,7 @@ struct Lighting {
 struct Vtx {
     Vec4 clip;
     Vec3 wpos;
+    Vec3 opos;  // position in the mesh's own space (objectPosition)
     Vec3 nrm;
     Vec4 tan;
     Vec4 color{1, 1, 1, 1}, particle{}, custom{};
@@ -347,6 +395,7 @@ Vtx LerpVtx(const Vtx& a, const Vtx& b, float t) {
     Vtx r;
     r.clip = a.clip + (b.clip - a.clip) * t;
     r.wpos = a.wpos + (b.wpos - a.wpos) * t;
+    r.opos = a.opos + (b.opos - a.opos) * t;
     r.nrm = a.nrm + (b.nrm - a.nrm) * t;
     r.tan = a.tan + (b.tan - a.tan) * t;
     r.color = a.color + (b.color - a.color) * t;
@@ -368,6 +417,8 @@ struct RasterMaterial {
     float uvScale[2] = {1, 1};
     Vec4 particleInput{}, particleCustom{};
     float shaderTime = 0;
+    Vec4 viewer;  // the camera, for the viewDirection graph input (ShaderViewer)
+    bool linear = false;  // RenderLights::linear: color textures are sRGB (decoded before filtering, Texture::Decoded)
 };
 
 enum class Cull { Back, Front, None };
@@ -497,25 +548,31 @@ private:
                 float alpha = m.opacity * color.w;
                 if (m.baseTexture) {
                     float ta = 1.0f;
-                    base = base * m.baseTexture->Sample(u, v, m.pixelArt, &ta);
+                    base = base * m.baseTexture->Sample(u, v, m.pixelArt, &ta, m.baseTexture->Decoded(mat.linear));
                     alpha *= ta;
                 }
                 Color shaderEmissive(0, 0, 0);
                 Vec3 shaderNormal;  // graph `normal` output; zero = keep the geometric normal
+                ShaderInputs input;  // kept for the light stage of the graph
                 if (m.shader) {
-                    ShaderInputs input;
                     input.uv = Vec4(u, v, 0, 0);
                     input.position = Vec4(a.wpos * p0 + b.wpos * p1 + c.wpos * p2, 1);
+                    input.objectPosition = Vec4(a.opos * p0 + b.opos * p1 + c.opos * p2, 1);
+                    input.viewDirection = ShaderViewDirection(mat.viewer, input.position.xyz());
                     Vec3 normal = mat.flat ? faceN : Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
                     if (backFace) normal = -normal;
                     input.normal = Vec4(normal, 0);
                     input.baseColor = Vec4(base.r, base.g, base.b, alpha);
+                    if (lighting) {
+                        const Color ambient = lighting->AmbientAt(normal);
+                        input.ambient = Vec4(ambient.r, ambient.g, ambient.b, 0);
+                    }
                     input.time = mat.shaderTime;
                     input.particle = mat.particleInput + a.particle * p0 + b.particle * p1 + c.particle * p2;
                     input.custom = mat.particleCustom + a.custom * p0 + b.custom * p1 + c.custom * p2;
-                    input.texture = [&m](float x, float y) {
+                    input.texture = [&m, linear = mat.linear](float x, float y) {
                         float ta = 1;
-                        const Color color = m.baseTexture ? m.baseTexture->Sample(x, y, m.pixelArt, &ta) : Color(1, 1, 1);
+                        const Color color = m.baseTexture ? m.baseTexture->Sample(x, y, m.pixelArt, &ta, m.baseTexture->Decoded(linear)) : Color(1, 1, 1);
                         return Vec4(color.r, color.g, color.b, ta);
                     };
                     const ShaderSurface surface = EvaluateShaderGraph(*m.shader, input, m.shaderUniforms);
@@ -534,7 +591,7 @@ private:
                 if (!mat.blend && !lighting->decals.empty()) {
                     Vec3 normal = mat.flat ? faceN : Normalize(a.nrm*p0 + b.nrm*p1 + c.nrm*p2);
                     if (backFace) normal = -normal;
-                    base = ApplyDecals(lighting->decals,lighting->decalAtlas.get(),a.wpos*p0+b.wpos*p1+c.wpos*p2,normal,base);
+                    base = ApplyDecals(lighting->decals,lighting->decalAtlas.get(),a.wpos*p0+b.wpos*p1+c.wpos*p2,normal,base,mat.linear);
                 }
                 ScreenReflectionPixel* reflection = reflections_ && !mat.blend ? &reflections_[idx] : nullptr;
                 if (reflection) *reflection = ScreenReflectionPixel();
@@ -565,7 +622,8 @@ private:
                     }
                     if (m.occlusionTexture) ao = 1.0f + m.occlusionStrength * (m.occlusionTexture->Sample(u, v, m.pixelArt, nullptr).r - 1.0f);
                     if (!mat.blend) ao *= lighting->AmbientVisibility(x, y, wpos, ng);
-                    out = lighting->Shade(wpos, n, ng, base, metallic, roughness, ao, reflection);
+                    if (m.shader && m.shader->light >= 0) out = lighting->ShadeGraph(*m.shader, input, m.shaderUniforms, wpos, ng, base, ao);
+                    else out = lighting->Shade(wpos, n, ng, base, metallic, roughness, ao, reflection);
                 } else if (m.light2DOn) {  // mesh_fs: the light2D branch
                     const Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
                     Vec3 ng = Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
@@ -589,7 +647,7 @@ private:
                 if (reflection && mat.id == lighting->planar.id) *reflection = ScreenReflectionPixel();
                 out = lighting->PlanarColor(mat.id, a.wpos * p0 + b.wpos * p1 + c.wpos * p2, out);
                 Color em = m.emissive * m.emissiveIntensity;
-                if (m.emissiveTexture) em = em * m.emissiveTexture->Sample(u, v, m.pixelArt, nullptr);
+                if (m.emissiveTexture) em = em * m.emissiveTexture->Sample(u, v, m.pixelArt, nullptr, m.emissiveTexture->Decoded(mat.linear));
                 out = out + em + shaderEmissive;
                 if (m.fog && lighting->fog.fog > 0) {  // mesh_fs: additive surfaces fade, others mix toward fogColor
                     const Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
@@ -705,7 +763,8 @@ Transformed TransformItem(const RenderItem& item) {
 }
 
 void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, const std::vector<Transformed>& transformed,
-                       const std::vector<DrawCall>& draws, float shaderTime, int cameraWidth = 0, int cameraHeight = 0) {
+                       const std::vector<DrawCall>& draws, float shaderTime, const Vec4& viewer, int cameraWidth = 0,
+                       int cameraHeight = 0) {
     const bool camera = cameraWidth > 0;
     const int width = camera ? cameraWidth : sm.size, height = camera ? cameraHeight : sm.size;
     // Light-space vertices once, then rasterize depth in parallel bands.
@@ -721,7 +780,9 @@ void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, cons
         Rasterizer shadowRaster(width, height, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
         RasterMaterial none;
         for (const DrawCall& dc : draws) {
-            if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
+            // Shadows (and the SSAO depth) come from opaque surfaces whose material casts them; extra passes
+            // (nextPass, outline shells) only add color.
+            if (dc.blend || dc.pass > 0 || !dc.material.castShadows || lightClip[dc.item].empty()) continue;
             const Mesh& m = *items[dc.item].mesh;
             const Submesh& sub = m.submeshes[dc.submesh];
             const RenderItem& item = items[dc.item];
@@ -731,6 +792,7 @@ void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, cons
             material.m = &dc.material;
             material.flat = item.flat;
             material.shaderTime = shaderTime;
+            material.viewer = viewer;
             if (camera) { material.particleInput = item.particleInput; material.particleCustom = item.particleCustom; }
             material.uvOffset[0] = item.uvOffset[0];
             material.uvOffset[1] = item.uvOffset[1];
@@ -748,6 +810,7 @@ void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, cons
                             if (vertex < m.particleCustom.size()) v[j].custom = m.particleCustom[vertex];
                         }
                         v[j].wpos = transformed[dc.item].wpos[vertex];
+                        v[j].opos = m.positions[vertex];
                         v[j].nrm = transformed[dc.item].nrm[vertex];
                         if (vertex * 2 + 1 < m.uvs.size()) {
                             v[j].u = m.uvs[vertex * 2];
@@ -785,6 +848,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     const PostProcess post = NormalizePostProcess(view.postProcess);
     RenderLights gathered = GatherRenderLights(scene, assets_);
     const bool picture = view.sceneColor != nullptr;  // a reflection probe's picture: scenery only, no probes, no post
+    const PostGraph postGraph = picture ? PostGraph{} : ResolvePostGraph(post, assets_);
+    const bool beforeGraph = postGraph.graph && postGraph.graph->beforeToneMapping;
     auto fillFloor = [&](Color c) {
         return view.editorFill > 0.0f
             ? Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)) : c;
@@ -794,8 +859,9 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     if (env.map && view.editorFill > 0.0f) env.sh[0] = env.sh[0] + Vec3(view.editorFill, view.editorFill, view.editorFill);
 
     std::vector<Color> hdr;
-    const bool usesHdr = UsesHdr(post) || picture;
-    if (usesHdr) hdr.assign(target.color.size(), ClampHdr(view.clearColor));
+    // Linear lighting keeps the scene in float and encodes it once, after tone mapping.
+    const bool usesHdr = UsesHdr(post) || picture || gathered.linear || beforeGraph;
+    if (usesHdr) hdr.assign(target.color.size(), ClampHdr(SceneColor(view.clearColor, gathered.linear)));
     if (env.present && env.background) {
         // Background is the sky along each pixel's world ray (the skybox), not a flat clear color.
         // The ray (far point minus near point) is linear across the screen: four corners give all.
@@ -840,12 +906,14 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     }
     lighting.decals = GatherDecals(scene,assets_,view);
     lighting.decalAtlas = decalAtlas_.Prepare(lighting.decals);
+    lighting.linear = gathered.linear;
     lighting.ambient = fillFloor(gathered.ambient);
     lighting.groundAmbient = fillFloor(gathered.groundAmbient);
     lighting.hemisphere = gathered.hemisphere;
     lighting.env = env;
     if (!picture) lighting.probes = ActiveProbes(scene, assets_, gathered, view.proj * view.view, view.eye);
     lighting.fog = post;
+    lighting.fog.fogColor = SceneColor(post.fogColor, gathered.linear);
     lighting.dirs = gathered.dirs;
     lighting.points = gathered.points;
     lighting.spots = gathered.spots;
@@ -857,12 +925,32 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::vector<Transformed> transformed;
     transformed.reserve(items.size());
     for (const RenderItem& it : items) transformed.push_back(TransformItem(it));
-    const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &gathered, view.playing);
+    const GraphViewInputs graphView = MakeGraphViewInputs(view.proj, target.width, target.height);
+    const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &gathered, view.playing, &graphView);
     // Vertex stage of shader graphs with an `offset` output (mesh_vs runs the same instructions).
-    for (const DrawCall& dc : draws) {
-        std::vector<Vec3>& wpos = transformed[dc.item].wpos;
-        ForEachVertexOffset(items[dc.item], dc, view.shaderTime,
-                            [&](uint32_t vertex, const Vec3& position, const Vec3& offset) { wpos[vertex] = position + offset; });
+    // Extra passes keep their own positions so their offset does not move the surface they belong to.
+    std::vector<std::vector<Vec3>> passPos(draws.size());
+    // Draws with Material::smoothNormals: those normals in world space (as TransformItem's).
+    std::vector<std::vector<Vec3>> drawNrm(draws.size());
+    for (size_t d = 0; d < draws.size(); ++d) {
+        const DrawCall& dc = draws[d];
+        if (dc.material.smoothNormals) {
+            const RenderItem& item = items[dc.item];
+            const std::vector<Vec3> smooth = item.mesh->SmoothNormals();
+            drawNrm[d].resize(smooth.size());
+            for (size_t i = 0; i < smooth.size(); ++i) {
+                const Mat4 skin = item.VertexSkinMatrix(i);
+                const Mat4 skinNormal = item.joints.empty() ? Mat4{} : skin.Inverse().Transposed();
+                drawNrm[d][i] = Normalize(item.normalMatrix.TransformDir(skinNormal.TransformDir(smooth[i])));
+            }
+        }
+        std::vector<Vec3>* wpos = &transformed[dc.item].wpos;
+        if (dc.pass > 0) {
+            passPos[d] = *wpos;
+            wpos = &passPos[d];
+        }
+        ForEachVertexOffset(items[dc.item], dc, view.shaderTime, ShaderViewer(view), gathered.linear,
+                            [&](uint32_t vertex, const Vec3& position, const Vec3& offset) { (*wpos)[vertex] = position + offset; });
     }
 
     // ----- Shadow map (first directional light, fitted to the shadow casters + receivers)
@@ -891,7 +979,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                 sm.texelWorld = fit.texelWorld;
                 sm.depthBias = fit.depthBias;
                 sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
-                RenderShadowDepth(sm, items, transformed, draws, view.shaderTime);
+                RenderShadowDepth(sm, items, transformed, draws, view.shaderTime, ShaderViewer(view));
             }
         }
     }
@@ -904,7 +992,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         sm.enabled = true; sm.size = kLocalShadowTileSize; sm.strength = 1;
         sm.viewProj = lighting.localShadows.maps[i].viewProj;
         sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
-        RenderShadowDepth(sm, items, transformed, draws, view.shaderTime);
+        RenderShadowDepth(sm, items, transformed, draws, view.shaderTime, ShaderViewer(view));
     }
 
     // ----- Main pass
@@ -913,7 +1001,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         ShadowMap depth;
         depth.viewProj = viewProj;
         depth.depth.assign(target.depth.size(), 1);
-        RenderShadowDepth(depth, items, transformed, draws, view.shaderTime, target.width, target.height);
+        RenderShadowDepth(depth, items, transformed, draws, view.shaderTime, ShaderViewer(view), target.width, target.height);
         lighting.ssaoDepth = std::move(depth.depth);
         lighting.ssaoInverse = viewProj.Inverse();
         lighting.ssaoProjection = view.proj;
@@ -923,6 +1011,11 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     for (size_t i = 0; i < items.size(); ++i) {
         clip[i].reserve(transformed[i].wpos.size());
         for (const Vec3& p : transformed[i].wpos) clip[i].push_back(viewProj * Vec4(p, 1.0f));
+    }
+    std::vector<std::vector<Vec4>> passClip(draws.size());
+    for (size_t d = 0; d < draws.size(); ++d) {
+        passClip[d].reserve(passPos[d].size());
+        for (const Vec3& p : passPos[d]) passClip[d].push_back(viewProj * Vec4(p, 1.0f));
     }
     std::vector<ScreenReflectionPixel> reflections;
     if (!picture && post.ssr > 0) reflections.resize(target.color.size());
@@ -940,9 +1033,11 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         RasterMaterial mat;
         mat.m = &dc.material;
         mat.shaderTime = view.shaderTime;
+        mat.viewer = ShaderViewer(view);
         mat.particleInput = it.particleInput;
         mat.particleCustom = it.particleCustom;
         mat.flat = it.flat;
+        mat.linear = gathered.linear;
         mat.blend = dc.blend;
         mat.pick = it.pickable;
         mat.id = it.id;
@@ -950,18 +1045,25 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         mat.uvOffset[1] = it.uvOffset[1];
         mat.uvScale[0] = it.uvScale[0];
         mat.uvScale[1] = it.uvScale[1];
-        const Cull cull = dc.material.doubleSided ? Cull::None : Cull::Back;
+        // Extra passes use their own positions; cull front draws back faces only (inverted-hull outlines).
+        const size_t d = static_cast<size_t>(&dc - draws.data());
+        const bool extraPass = dc.pass > 0;
+        const std::vector<Vec3>& wpos = extraPass ? passPos[d] : tr.wpos;
+        const std::vector<Vec4>& clips = extraPass ? passClip[d] : clip[i];
+        const std::vector<Vec3>& nrm = dc.material.smoothNormals ? drawNrm[d] : tr.nrm;
+        const Cull cull = dc.material.cullFront ? Cull::Front : dc.material.doubleSided ? Cull::None : Cull::Back;
         for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
             Vtx v[3];
             for (int j = 0; j < 3; ++j) {
                 uint32_t idx = m.indices[k + static_cast<uint32_t>(j)];
-                v[j].wpos = tr.wpos[idx];
-                v[j].nrm = tr.nrm[idx];
+                v[j].wpos = wpos[idx];
+                v[j].opos = m.positions[idx];
+                v[j].nrm = nrm[idx];
                 v[j].tan = tr.tan[idx];
-                if (idx < m.colors.size()) v[j].color = m.colors[idx];
+                v[j].color = m.VertexColor(idx, gathered.linear);
                 if (idx < m.particleData.size()) v[j].particle = m.particleData[idx];
                 if (idx < m.particleCustom.size()) v[j].custom = m.particleCustom[idx];
-                v[j].clip = clip[i][idx];
+                v[j].clip = clips[idx];
                 if (idx * 2 + 1 < m.uvs.size()) {
                     v[j].u = m.uvs[idx * 2];
                     v[j].v = m.uvs[idx * 2 + 1];
@@ -1012,7 +1114,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), 0, -1,
                       hdr.empty() ? nullptr : hdr.data());
     auto line = [&](const Vec3& a, const Vec3& b, const Color& c, float alpha) {
-        raster.Line(viewProj * Vec4(a, 1.0f), viewProj * Vec4(b, 1.0f), c, alpha);
+        raster.Line(viewProj * Vec4(a, 1.0f), viewProj * Vec4(b, 1.0f), SceneColor(c, gathered.linear), alpha);
     };
     if (view.drawGrid) {
         const Color gridColor(0.55f, 0.58f, 0.62f);
@@ -1073,6 +1175,45 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         }
     }
 
+    if (postGraph.graph) stats.postGraph = "software";
+    if (beforeGraph) {
+        // Read an immutable scene image so neighboring samples never see another pixel's output.
+        const std::vector<Color> source = hdr;
+        const float w = static_cast<float>(target.width), h = static_cast<float>(target.height);
+        auto sample = [&](float u, float v) {
+            const float x = Clamp(u * w - 0.5f, 0, w - 1), y = Clamp(v * h - 0.5f, 0, h - 1);
+            const int x0 = static_cast<int>(std::floor(x)), y0 = static_cast<int>(std::floor(y));
+            const int x1 = std::min(x0 + 1, target.width - 1), y1 = std::min(y0 + 1, target.height - 1);
+            const float tx = x - static_cast<float>(x0), ty = y - static_cast<float>(y0);
+            auto read = [&](int px, int py) { return source[static_cast<size_t>(py) * static_cast<size_t>(target.width) + static_cast<size_t>(px)]; };
+            return (read(x0, y0) * (1 - tx) + read(x1, y0) * tx) * (1 - ty) +
+                   (read(x0, y1) * (1 - tx) + read(x1, y1) * tx) * ty;
+        };
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            ShaderInputs inputs;
+            inputs.time = view.shaderTime;
+            inputs.texel = Vec4(1 / w, 1 / h, w, h);
+            inputs.scene = [&](float u, float v) {
+                const Color c = sample(u, v);
+                return Vec4(c.r, c.g, c.b, 1);
+            };
+            inputs.sceneBlur = [&](float u, float v, float spacing) {
+                Color sum(0, 0, 0);
+                float total = 0;
+                for (int j = -2; j <= 2; ++j) for (int i = -2; i <= 2; ++i) {
+                    const float weight = SceneBlurWeight(i, j);
+                    sum = sum + sample(u + static_cast<float>(i) * spacing / w, v + static_cast<float>(j) * spacing / h) * weight;
+                    total += weight;
+                }
+                return Vec4(sum.r / total, sum.g / total, sum.b / total, 1);
+            };
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                inputs.uv = Vec4((static_cast<float>(x) + 0.5f) / w, (static_cast<float>(y) + 0.5f) / h, 0, 0);
+                const Vec4 out = EvaluateShaderGraph(*postGraph.graph, inputs, postGraph.uniforms).color;
+                hdr[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] = ClampHdr(Color(out.x, out.y, out.z));
+            }
+        });
+    }
     std::vector<Color> bloom;
     if (post.bloom > 0) {
         const int radius = post.bloomRadius;
@@ -1110,18 +1251,19 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
                 size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x);
                 uint32_t c = target.color[pixel];
-                float factor = VignetteFactor(post, (static_cast<float>(x) + 0.5f) / static_cast<float>(target.width),
-                                                   (static_cast<float>(y) + 0.5f) / static_cast<float>(target.height));
+                const Color factor = VignetteFactor(post, (static_cast<float>(x) + 0.5f) / static_cast<float>(target.width),
+                                                          (static_cast<float>(y) + 0.5f) / static_cast<float>(target.height));
                 Color display = hdr.empty() ? Color(static_cast<float>(c & 255) / 255,
                                                      static_cast<float>((c >> 8) & 255) / 255,
                                                      static_cast<float>((c >> 16) & 255) / 255) :
                                 ToneMap(hdr[pixel] + (bloom.empty() ? Color(0, 0, 0) : bloom[pixel] * post.bloom), post);
+                if (gathered.linear && !hdr.empty()) display = LinearToSrgb(display);
                 if (grading) display = Grade(display, post);
                 target.color[pixel] = Pack(display * factor);
             }
         });
     }
-    if (post.fxaa) {
+    if (post.fxaa || (postGraph.graph && !beforeGraph)) {
         const std::vector<uint32_t> source = target.color;
         auto sample = [&](float x, float y) {
             x = Clamp(x, 0, static_cast<float>(target.width - 1));
@@ -1137,10 +1279,43 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             return (read(x0, y0) * (1 - tx) + read(x1, y0) * tx) * (1 - ty) +
                    (read(x0, y1) * (1 - tx) + read(x1, y1) * tx) * ty;
         };
+        // A post graph reads the same quantized display image: sceneColor through FXAA when it is on,
+        // sceneBlur from the plain image (composite_fs does the same).
+        auto center = [&](float x, float y) { return post.fxaa ? FxaaPixel(x, y, sample) : sample(x, y); };
+        const float w = static_cast<float>(target.width), h = static_cast<float>(target.height);
         ParallelBands(target.height, [&](int, int y0, int y1) {
-            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x)
-                target.color[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] =
-                    Pack(FxaaPixel(static_cast<float>(x), static_cast<float>(y), sample));
+            ShaderInputs inputs;
+            if (postGraph.graph && !beforeGraph) {
+                inputs.time = view.shaderTime;
+                inputs.texel = Vec4(1 / w, 1 / h, w, h);
+                inputs.scene = [&](float u, float v) {
+                    const Color c = center(u * w - 0.5f, v * h - 0.5f);
+                    return Vec4(c.r, c.g, c.b, 1);
+                };
+                inputs.sceneBlur = [&](float u, float v, float spacing) {
+                    const float x = u * w - 0.5f, y = v * h - 0.5f;
+                    Color sum(0, 0, 0);
+                    float total = 0;
+                    for (int j = -2; j <= 2; ++j) for (int i = -2; i <= 2; ++i) {
+                        const float weight = SceneBlurWeight(i, j);
+                        sum = sum + sample(x + static_cast<float>(i) * spacing, y + static_cast<float>(j) * spacing) * weight;
+                        total += weight;
+                    }
+                    return Vec4(sum.r / total, sum.g / total, sum.b / total, 1);
+                };
+            }
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+                Color c;
+                if (postGraph.graph && !beforeGraph) {
+                    inputs.uv = Vec4((fx + 0.5f) / w, (fy + 0.5f) / h, 0, 0);
+                    const Vec4 out = EvaluateShaderGraph(*postGraph.graph, inputs, postGraph.uniforms).color;
+                    c = Color(Clamp(out.x, 0, 1), Clamp(out.y, 0, 1), Clamp(out.z, 0, 1));
+                } else {
+                    c = center(fx, fy);
+                }
+                target.color[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] = Pack(c);
+            }
         });
     }
     if (view.highlight != kNullEntity) DrawOutline(target, view.highlight);

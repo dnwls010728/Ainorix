@@ -15,5 +15,11 @@ void RemoveEditorShaderNode(Json& document, int index);
 int EditorShaderArity(const std::string& operation);
 // All portable operations, in palette order.
 const std::vector<std::string>& EditorShaderOperations();
+// Whether an operation exists in a surface graph (material) or a post graph (`"stage": "post"`).
+bool EditorShaderOperationInStage(const std::string& operation, bool post);
+// A post graph document (`"stage": "post"`): color output only.
+bool EditorShaderIsPost(const Json& document);
+// Most nodes a graph holds (ShaderGraph::kMaxNodes, either stage).
+int EditorShaderMaxNodes();
 
 }  // namespace oe

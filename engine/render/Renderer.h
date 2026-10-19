@@ -65,11 +65,22 @@ struct RenderView {
     EntityId excludeEntity = kNullEntity;  // Internal capture receiver excluded from all draw/shadow passes.
 };
 
+// The camera as the viewDirection input of shader graphs sees it (ShaderViewDirection): its position (w = 0), or
+// for an orthographic projection the unit vector toward it along its axis (w = 1).
+inline Vec4 ShaderViewer(const RenderView& view) {
+    if (view.proj.at(3, 3) == 1) return Vec4(view.view.at(2, 0), view.view.at(2, 1), view.view.at(2, 2), 1);
+    return Vec4(view.eye.x, view.eye.y, view.eye.z, 0);
+}
+
 struct RenderStats {
     int drawnEntities = 0;
     int triangles = 0;
     double milliseconds = 0.0;
     int drawCalls = 0;  // GPU renderer: mesh draws of the scene pass after culling (0 for the software renderer)
+    // How PostProcess.shader ran: "none", "software" (EvaluateShaderGraph), "compiled" (its own GPU composite
+    // program), "interpreted" (composite_fs loop while compiling or after a failed compile) or "skipped" (too
+    // large for the interpreter while its program is not ready).
+    const char* postGraph = "none";
 };
 
 // Rendering backend interface. The software rasterizer is the reference

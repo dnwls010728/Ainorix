@@ -336,6 +336,49 @@ Not engine components (official Lua modules or template scripts instead, because
 camera helpers (dead zone, look-ahead, shake, zoom, room transitions — e.g. `oe.camera2d`) and parallax
 backgrounds (endless scrolling wants the repeated sprites of T10).
 
+### C. Color pipeline and shader graph follow-ups — in progress (2026-10-19)
+
+Work driven by `games/Kongal` (matching its three.js prototype, `E:\Projects\Game\kongal\viewer`). Every item is
+a generic engine feature in both renderers with a test and docs; check the CPU/GPU parity tests when touching them.
+
+Done (one commit, see its message):
+
+- [x] Post-process shader graphs (`"stage": "post"`), material passes (`nextPass`, outlines), per-light custom lighting
+  (`light` output), material `smoothNormals` ([POSTPROCESS.md](POSTPROCESS.md), [RENDERING.md](RENDERING.md)).
+- [x] Linear lighting: project.json `"rendering": {"colorSpace": "linear"}` ([RENDERING.md](RENDERING.md#color-space)).
+- [x] GLES3 uniform budget: interpreter instructions packed four per vec4 (`GraphCode`), surface graphs up to 128
+  nodes when compiled, 48 interpreted; `Engine::SetGpuCompileGraphs(false)` forces the interpreter (tests).
+- [x] Graph inputs `viewDirection` and `objectPosition` (rest pose; such graphs are drawn unbatched).
+- [x] glTF `COLOR_0` is linear (`Mesh::linearColors`), not decoded twice.
+- [x] Color textures decoded before filtering (GPU `SRGB8A8`, sRGB-correct mips, CPU `Texture::Sample` decode);
+  `<image>.texture.json` `{"sRGB": false}` marks data images (`Texture::srgb`).
+- [x] Post graph `"injection": "beforeToneMapping"` (HDR scene before bloom) / `"afterToneMapping"` (default).
+- [x] Test runner shares a shader cache (`Engine::SetDefaultGpuShaderCache`, `build/test-shader-cache`) and prints
+  each test's time; a full run went from about 8 minutes to about 2.
+
+Next, in this order unless a game needs another first:
+
+1. [ ] Game shader cache by default: games (`oe run`, players) compile the built-in HLSL programs on every start
+   (about 3 s on D3D11). Give them a per-user cache folder (`GpuRenderer::Settings::shaderCacheDir`, as the editor
+   does with `<project>/.oe/shader-cache`). Shipping the built-ins as bytecode (`sokol-shdc --bytecode`) was tried
+   and rejected: it drops the HLSL source that compiled graphs patch (`GraphSource.cpp`).
+2. [ ] Editor UI for the new settings: project `rendering.colorSpace`, material `smoothNormals`, an image's sRGB
+   flag (writes `<image>.texture.json`), today edited as JSON only.
+3. [ ] Kongal: move `shaders/watercolor.shader.json` to `"injection": "beforeToneMapping"` (the prototype runs it
+   in linear light before its OutputPass) and refit its values against the viewer (`games/Kongal/AGENTS.md`
+   "Matching the three.js prototype"); decide the main scene's shadow strength.
+4. [ ] `Light2D` in linear projects: light colors and the light map are not converted yet.
+5. [ ] GPUs without float render targets: a linear project does not run there (no RGBA8 + encode fallback).
+6. [ ] Smaller gaps: the decal atlas ignores its source images' sRGB flag; the software planar reflection samples
+   the display image and decodes it, the GPU samples the scene before the composite; no test yet for the CPU vertex
+   stage decoding vertex colors in linear projects, nor for `objectPosition` on a skinned mesh.
+7. [ ] Test run time: about 2 minutes, mostly real-time network and team-process tests
+   (`NetworkWatchdogKeepsStalledClient` 22 s, Team* about 35 s); running tests in parallel needs per-test temp
+   folders first.
+
+Not run anywhere but Windows D3D11 and the software renderer: the newer shaders on WebGL2/GLES3/EGL; the prebuilt
+Web/Android players need rebuilding.
+
 ### P8. 2D navigation (grid path finding) — [ ]
 
 - The 3D navigation mesh exists ([NAVIGATION.md](NAVIGATION.md)); this is its 2D counterpart.
@@ -351,8 +394,7 @@ backgrounds (endless scrolling wants the repeated sprites of T10).
 
 Kept from earlier pilots; start one only when a game needs it, with its own work log.
 
-- Shader graphs: raise the 48-node limit (64 fits the WebGL2 uniform minimum by estimate; verify on devices) or
-  generate GLSL per graph at packaging time ([POSTPROCESS.md](POSTPROCESS.md#portable-surface-shader-graphs)).
+- Shader graphs: generate GLSL per graph at packaging time ([POSTPROCESS.md](POSTPROCESS.md#portable-surface-shader-graphs)).
 - PostProcess: chromatic aberration, film grain seeded by the frame number, screen-space tilt-shift.
 - UI: `ui.fitText` (box fitting / auto-shrink with painted bounds), an owner-bound widget subtree show/hide
   contract, Japanese-capable default font fallback.

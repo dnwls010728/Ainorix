@@ -10,7 +10,8 @@ class Engine;
 
 // New projects are copies of templates/<name>/ (shipped next to the
 // executable, falling back to the source tree):
-//   project.json            {"format":"ownengine.project","name":..,"startScene":..}
+//   project.json            {"format":"ownengine.project","name":..,"startScene":..} (optional "rendering":
+//                           {"colorSpace": "gamma" | "linear"}, docs/RENDERING.md#color-space)
 //   scenes/*.scene.json     scenes (the sample is a two-level coin game)
 //   prefabs/*.prefab.json   prefabs
 //   scripts/*.lua           gameplay scripts

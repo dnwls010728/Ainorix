@@ -149,11 +149,18 @@ A material file is a JSON object with any of the fields below (missing fields ke
 | `emissiveTexture` | none | Image multiplied with `emissive` |
 | `alphaMode` | `opaque` | `opaque`, `mask` (cut out below `alphaCutoff`) or `blend` (transparent) |
 | `alphaCutoff` | 0.5 | Threshold for `mask` |
-| `doubleSided` | false | Draw back faces too (leaves, cloth, glass panes) |
+| `doubleSided` | false | Draw back faces too (leaves, cloth, glass panes); the same as `cull: "none"` |
+| `cull` | `back` | Faces not drawn: `back`, `front` (only back faces: inverted-hull outlines, inside views) or `none` |
+| `castShadows` | true | `false` keeps the surface out of the shadow maps (whatever `MeshRenderer.castShadows` says) |
+| `smoothNormals` | false | Vertex normals averaged where vertices share a position (hard edges, uv seams; `Mesh::SmoothNormals`), so a shell pushed out along them stays closed. Built-in outlines use it |
+| `nextPass` | none | Another `*.mat.json` drawn on the same mesh right after this one. See [Material passes](#material-passes) |
 | `unlit` | false | Ignore lights: color = base (+ emissive) |
 | `pixelArt` | false | Nearest-neighbour texture sampling |
 | `tiling` | `[1,1]` | UV repeat |
 | `offset` | `[0,0]` | UV offset |
+| `outlineWidth` | 0 | Toon outline around the surface, in `outlineUnits` (world 0..0.25, pixels 0..16); 0 = none. See [Outlines](#outlines) |
+| `outlineColor` | black | Outline color `[r,g,b]` or `"#rrggbb"` (unlit) |
+| `outlineUnits` | `world` | `world` (outlineWidth 0..0.25 world units) or `pixels` (0..16 screen pixels at any distance) |
 
 The one-line docs for every field are also in the `invalid_material` error hint. Examples:
 
@@ -182,6 +189,68 @@ oe exec <project> asset.info '{"path":"materials/gold.mat.json"}'
 ```
 
 `material.create {path, values?, overwrite?}` writes all fields with defaults plus your `values`; `material.set {path, values}` merges into an existing file. Material files are **hot-reloaded**, also when a texture they use changes.
+
+### Outlines
+
+A material with `outlineWidth` > 0 draws a toon outline around its surface, the inverted-hull way: after all
+opaque surfaces, both renderers draw the same submesh again with the vertices pushed out along their world normals
+by `outlineWidth`, front faces culled and unlit in `outlineColor`. Only the part of that shell that sticks out
+past the silhouette (and past creases where a part overlaps another) stays visible, so it reads as a line. It
+follows skinned animation, blend shapes and the entity's scale, needs no second entity or `parentPose` copy, and
+works with shader graph materials (`{"shader": "shaders/toon.shader.json", "outlineWidth": 2.2,
+"outlineUnits": "pixels", "outlineColor": "#5c3519"}`).
+
+`outlineUnits` picks how the width is measured:
+
+| outlineUnits | outlineWidth | Looks |
+|---|---|---|
+| `world` (default) | 0..0.25 world units | A line of constant world thickness: thinner far away, thicker close up |
+| `pixels` | 0..16 pixels of the render target | The same thickness on screen at any distance, like the outline of a drawing |
+
+Pixel outlines use the engine's second outline graph: the offset is the width times the world size of a pixel
+at the vertex (the reserved `cameraPosition` and `pixelScale` uniforms, see
+[POSTPROCESS.md](POSTPROCESS.md#portable-surface-shader-graphs)); both perspective and orthographic cameras work.
+
+- Opaque and `mask` materials only; a blended material ignores it. The shell is not cut out by `mask`.
+- The shell casts no shadow, is left out of the SSAO/SSR depth prepass and the editor selection outline, and keeps
+  the material's `fog` setting. It writes the entity id, so clicking the line picks the object.
+- The shell starts from the undisplaced surface: a graph `offset` on the material does not move it.
+- The shell moves along smoothed normals (`smoothNormals`): a hard-edged mesh such as the `cube` built-in keeps a
+  closed line at its corners instead of six separate faces (Unity toon shaders bake the same averaged normals).
+  A hand-written pass gets this with `"smoothNormals": true`. Test: `MaterialSmoothNormals`.
+- The cull margin of a shell is 0.25 (world) or 2 (pixels) world units; a pixel outline far enough away to
+  move vertices further can be culled at the screen edge.
+
+Implementation: the outline fields are a shortcut for a [material pass](#material-passes): `BuildDrawList` adds
+`OutlineMaterial(material)` (the engine's `OutlineShaderGraph`, `cull: "front"`, `castShadows: false`, `smoothNormals`, unlit) as an
+extra pass after the material's own `nextPass` chain. A pass written by hand gives the same picture (test
+`MaterialPassesAndCull`); use one when the outline needs something the fields do not offer (a texture, a
+graph-driven width). Test: `MaterialOutline`.
+
+### Material passes
+
+`nextPass` names another material that is drawn on the same submesh right after this one, like Godot's
+`next_pass` or a second pass in a Unity shader: an outline shell, a rim glow, a highlight. The pass material is
+an ordinary `*.mat.json` (its own graph, blending, `cull`) and may have a `nextPass` itself, up to four passes.
+
+```json
+// materials/hero.mat.json
+{"baseTexture": "assets/textures/hero.png", "shader": "shaders/toon.shader.json", "nextPass": "materials/shell.mat.json"}
+// materials/shell.mat.json: normal * width * pixel size (reserved pixelScale), back faces only, no shadow
+{"unlit": true, "cull": "front", "castShadows": false, "shader": "shaders/shell.shader.json"}
+```
+
+- Opaque passes are drawn after all opaque surfaces (small meshes batch), blended ones right after their surface
+  among the transparent ones.
+- A pass is drawn as its own material: the entity's `MeshRenderer` overrides (tint, texture, opacity) apply to the
+  surface, not to its passes.
+- Passes add color only: they cast no shadow and stay out of the depth prepass (SSAO/SSR, depth of field) and the
+  editor selection outline; a graph `offset` in a pass moves only that pass.
+- `material.create`/`material.set` and loading refuse a chain that leads back to a material already in it
+  (`nextPass cycle: a.mat.json -> b.mat.json -> a.mat.json`). Editing any material file reloads every material,
+  so a material holding it as a pass shows the change at once.
+- `cull: "front"` uses its own GPU pipelines (`FaceMode` 2) and `Cull::Front` in the software renderer; shadow
+  maps draw back faces (`cull: "back"`/`"front"`) or both (`"none"`) as before.
 
 ### How MeshRenderer combines with a material
 
@@ -225,13 +294,55 @@ glTF models load their full materials: base color factor including alpha, base c
 - Local shadows: two in-view/nearest point or spot lights per view, 512-square maps in a 2048-square atlas;
   same face selection, perspective bias and 3x3 PCF in both renderers. Shadow flags default to false.
 - Lighting is per pixel with a physically based model (glTF metallic-roughness): GGX normal distribution, Smith-Schlick geometry, Schlick Fresnel; F0 is 0.04 for dielectrics and the base color for metals, and the diffuse part is `baseColor * (1 - metallic)`. Both renderers use the same math (`Lighting::Shade` in `SoftwareRenderer.cpp`, `mesh_fs` in `Shaders.glsl`).
-- Light colors include the factor pi and lighting happens on non-linear (display) colors, clamped, with no tone mapping or HDR yet, so a white diffuse surface lit head-on still shows exactly the light color.
+- Light colors include the factor pi, so a white diffuse surface lit head-on shows exactly the light color. By default lighting happens on the stored (display) numbers; a project can light in linear space instead, see [Color space](#color-space).
 - Hemisphere ambient: with `DirectionalLight.hemisphere` the ambient light is `groundAmbient` for faces pointing down, `ambient` for faces pointing up, blended by `normal.y * 0.5 + 0.5` (outdoor scenes: blue sky above, warm bounce below). Off by default (one flat ambient color).
 - Environment lighting (`Skybox` component, one per scene; design and limits in [ENVIRONMENT.md](ENVIRONMENT.md)): a sky that lights the scene, is reflected by it and drawn behind it. Either three colors (`sky` zenith, `horizon`, `ground`: an analytic gradient) or an equirectangular panorama (`texture`: `.hdr`, which keeps light brighter than white, or `.png`/`.jpg`; turned by `rotation`), with `intensity` and a `reflections` strength. With one, image-based lighting replaces the flat ambient: diffuse light comes from the whole sky (by the normal), and smooth/metallic surfaces reflect it along the reflection vector, blurrier as they roughen (an image is blurred level by level when it loads, so roughness picks a level) — a chrome ball shows the sky, a wet floor catches the horizon. `background` draws it behind the scene; the three-color sky adds a soft sun disc toward the first directional light (`sun`, `sunSize`). Both renderers run the same math on the same data (`RenderScene.h` / `Environment.h` and `mesh_fs` / `sky_fs` in `Shaders.glsl`; keep them identical).
 - Local reflections (`ReflectionProbe` component; [ENVIRONMENT.md](ENVIRONMENT.md)): a picture of the scenery taken from the entity's position, used instead of the sky by the surfaces inside its box (`size`, `offset`; fading out over `blend` meters outside), so a room reflects its own walls and is ambient-lit by them (`ambient`). `boxProjection` keeps the reflection of a wall on the wall as the viewer moves. The picture is taken by the software renderer when it is first needed (so both renderers use the same one) and again after edits while stopped, at play start, or on `probe.bake` / Lua `game.bakeProbes()`; moving bodies, characters, animated models and effects are left out. Up to four probes per frame, blended per pixel. `probe.state {id, out}` writes a probe's picture to look at.
 - Without a `Skybox`, ambient stays as before: `DirectionalLight.ambient` * (diffuse + a hemisphere reflection brighter above than below). Very smooth metals then reflect only that approximation and the highlights of the lights. Ambient occlusion textures darken the ambient term only.
 - Emissive is added after lighting (also for unlit materials). `Sprite.emission` (lit sprites) turns the sprite's own image into emission at that fraction, so billboards seen against the light at night do not go black.
 - Distance fog (`PostProcess.fog`) is applied per surface after emission; materials with `"fog": false` skip it. See [POSTPROCESS.md](POSTPROCESS.md#fog-color-grading-and-aces).
+
+## Color space
+
+`project.json` chooses how colors are lit, like Unity's Color Space player setting:
+
+```json
+{"format": "ownengine.project", "name": "Kongal", "startScene": "scenes/main.scene.json",
+ "rendering": {"colorSpace": "linear"}}
+```
+
+- `"gamma"` (default, and every project without the field): colors and textures are lit as the numbers they
+  store. Existing scenes and their screenshot hashes stay as they are.
+- `"linear"`: authored colors are sRGB and lighting adds linear light, as glTF, three.js (`outputColorSpace =
+  SRGBColorSpace`), Unreal and Godot do. Both renderers decode material `baseColor`, `emissive` and
+  `outlineColor`, `MeshRenderer`/sprite tints, vertex colors (not glTF `COLOR_0`, which the glTF specification defines as linear:
+  `Mesh::linearColors`), light colors, ambient and hemisphere colors, sky
+  colors, the camera's clear color, fog color, decal colors and debug lines; color textures (base, emissive, the
+  graph `texture` node, decals) are decoded per texel before filtering, as Unity, Unreal and Godot sample sRGB
+  textures: the GPU uploads them as `SRGB8A8` (its mip levels averaged as linear light) and the software renderer
+  decodes the texels it blends (`Texture::Sample` with `decode`); 8-bit environment images are decoded when
+  they load and `.hdr` images are used as the linear light they store. The scene is kept in float (as for HDR
+  effects) and the composite encodes it to sRGB after exposure and tone mapping (`LinearToSrgb`), before colour
+  grading, the vignette, FXAA and post graphs, which keep working on the display image.
+- Data images: an image that holds numbers rather than colors (a flow or noise map in the base slot of a graph
+  material) gets a sidecar `<image>.texture.json` with `{"sRGB": false}` (Unity's "sRGB (Color Texture)" off);
+  it is then used as stored in every slot. Editing the sidecar reloads the image (`Texture::srgb`). Test:
+  `LinearColorTextures`.
+- Data stays as stored: normal, metallic-roughness and occlusion maps, alpha, and shader graph constants and
+  uniforms (a graph's `baseColor`, `texture` and `ambient` inputs arrive decoded; a color uniform written for a
+  gamma project needs its sRGB value decoded, e.g. 0.5 becomes 0.214).
+- A post graph with `"injection": "beforeToneMapping"` reads and writes linear HDR light, before bloom and the
+  encode (three.js passes before its OutputPass); the default `afterToneMapping` works on the display image
+  ([POSTPROCESS.md](POSTPROCESS.md#post-graphs)).
+- Not converted yet: 2D lights (`Light2D`), UI (drawn on the display image, so it is unaffected).
+
+Unlit colors come out as authored either way (decoded, then encoded); lit surfaces get the softer falloff and
+brighter mid-tones of linear light, and blending, bloom thresholds and fog mix in linear light. GPU devices without
+float render targets cannot run a linear project (as with HDR effects; use the software renderer). The flag lives
+in `AssetManager::LinearColor` and reaches the renderers through `RenderLights::linear`
+(`render/ColorSpace.h`, `SrgbToLinear`/`LinearToSrgb` in Shaders.glsl). Test: `LinearColorSpace` (unlit and
+textured colors survive, a lit white surface shows LinearToSrgb of its gamma value, the same on GPU and CPU; bad
+values are refused when the project opens).
 
 ## Cameras
 

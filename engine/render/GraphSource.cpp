@@ -9,7 +9,7 @@ namespace oe {
 
 namespace {
 
-enum class Stage { Vertex, Fragment };
+enum class Stage { Vertex, Fragment, Post, Light };
 
 struct Writer {
     GraphDialect dialect;
@@ -36,17 +36,17 @@ struct Writer {
 
     std::string Expression(const ShaderInstruction& ins) const {
         const std::string a = Reg(ins.args[0]), b = Reg(ins.args[1]), c = Reg(ins.args[2]);
-        const bool vertex = stage == Stage::Vertex;
+        const bool vertex = stage == Stage::Vertex, post = stage == Stage::Post;
         static const char kChannels[] = "xyzw";
         switch (ins.op) {
             case ShaderOp::Constant:
                 return Vec4() + "(" + Number(ins.value.x) + ", " + Number(ins.value.y) + ", " + Number(ins.value.z) + ", " + Number(ins.value.w) + ")";
             case ShaderOp::Uniform:
-                return std::string(vertex ? "VGraphUniform(" : "GraphUniform(") + std::to_string(static_cast<int>(ins.value.x)) + ")";
+                return std::string(vertex ? "VGraphUniform(" : post ? "PostUniform(" : "GraphUniform(") + std::to_string(static_cast<int>(ins.value.x)) + ")";
             case ShaderOp::UV: return Vec4() + "(uv, 0.0, 0.0)";
             case ShaderOp::Position: return vertex ? Vec4() + "(wpos, 1.0)" : "GraphPosition()";
             case ShaderOp::Normal: return Vec4() + (vertex ? "(nrm, 0.0)" : "(normal, 0.0)");
-            case ShaderOp::Time: return Splat(vertex ? "VGraphTime()" : "GraphTime()");
+            case ShaderOp::Time: return Splat(vertex ? "VGraphTime()" : post ? "PostTime()" : "GraphTime()");
             case ShaderOp::BaseColor: return vertex ? "VGraphBaseColor()" : Vec4() + "(base, alpha)";
             case ShaderOp::Texture: return vertex ? Vec4() + "(1.0, 1.0, 1.0, 1.0)" : "GraphTexture(" + a + ".xy)";
             case ShaderOp::Add: return "(" + a + " + " + b + ")";
@@ -85,6 +85,24 @@ struct Writer {
             case ShaderOp::ParticleCustom1: return Splat(vertex ? "VGraphCustom().y" : "GraphCustom().y");
             case ShaderOp::ParticleCustom2: return Splat(vertex ? "VGraphCustom().z" : "GraphCustom().z");
             case ShaderOp::ParticleCustom3: return Splat(vertex ? "VGraphCustom().w" : "GraphCustom().w");
+            case ShaderOp::Pow: return "GraphPow(" + a + ", " + b + ")";
+            case ShaderOp::Length: return Splat("length(" + a + ")");
+            case ShaderOp::Smoothstep: return "GraphSmoothstep(" + a + ", " + b + ", " + c + ")";
+            case ShaderOp::Noise: return Splat("GraphNoise(" + a + ".xyz)");
+            case ShaderOp::Fbm: return Splat("GraphFbm(" + a + ".xyz)");
+            // Post-stage inputs (CompileShaderGraph rejects them on surfaces), read through composite_fs helpers.
+            case ShaderOp::SceneColor: return Vec4() + "(PostScene(" + a + ".xy), 1.0)";
+            case ShaderOp::SceneBlur: return Vec4() + "(PostBlur(" + a + ".xy, " + b + ".x), 1.0)";
+            case ShaderOp::Texel: return "PostTexel()";
+            // Surface fragments (and the light stage): GraphAmbient is defined by every program that includes
+            // the surface graph block; the vertex stage has none (CompileShaderGraph rejects it there).
+            case ShaderOp::Ambient: return vertex ? Vec4() + "(0.0, 0.0, 0.0, 0.0)" : Vec4() + "(GraphAmbient(normal), 0.0)";
+            // The parameters of LightGraph; only the light output depends on them.
+            case ShaderOp::LightVector: return stage == Stage::Light ? Vec4() + "(light_vector, 0.0)" : Vec4() + "(0.0, 0.0, 0.0, 0.0)";
+            case ShaderOp::LightColor: return stage == Stage::Light ? Vec4() + "(light_color, 1.0)" : Vec4() + "(0.0, 0.0, 0.0, 0.0)";
+            case ShaderOp::LightAttenuation: return stage == Stage::Light ? Splat("light_atten") : Vec4() + "(0.0, 0.0, 0.0, 0.0)";
+            case ShaderOp::ViewDirection: return vertex ? "VGraphViewDirection(wpos)" : "GraphViewDirection()";
+            case ShaderOp::ObjectPosition: return vertex ? "VGraphObjectPosition()" : "GraphObjectPosition()";
         }
         return Vec4() + "(0.0, 0.0, 0.0, 0.0)";
     }
@@ -92,12 +110,13 @@ struct Writer {
     static int ArgCount(ShaderOp op) {
         switch (op) {
             case ShaderOp::Texture: case ShaderOp::Sin: case ShaderOp::Cos: case ShaderOp::Floor: case ShaderOp::Fract:
-            case ShaderOp::Abs: case ShaderOp::Normalize: case ShaderOp::Swizzle:
+            case ShaderOp::Abs: case ShaderOp::Normalize: case ShaderOp::Swizzle: case ShaderOp::Length:
+            case ShaderOp::Noise: case ShaderOp::Fbm: case ShaderOp::SceneColor:
                 return 1;
             case ShaderOp::Add: case ShaderOp::Subtract: case ShaderOp::Multiply: case ShaderOp::Divide: case ShaderOp::Min:
-            case ShaderOp::Max: case ShaderOp::Step: case ShaderOp::Dot:
+            case ShaderOp::Max: case ShaderOp::Step: case ShaderOp::Dot: case ShaderOp::Pow: case ShaderOp::SceneBlur:
                 return 2;
-            case ShaderOp::Clamp: case ShaderOp::Mix:
+            case ShaderOp::Clamp: case ShaderOp::Mix: case ShaderOp::Smoothstep:
                 return 3;
             default:
                 return 0;
@@ -137,6 +156,22 @@ std::string GraphSurfaceBody(const ShaderGraph& graph, GraphDialect dialect) {
     w.out += "        alpha = clamp(" + color + ".a, 0.0, 1.0);\n";
     w.out += "        emission = " + (graph.emissive >= 0 ? Writer::Reg(graph.emissive) + ".rgb" : w.Zero3()) + ";\n";
     w.out += "        normal_out = " + (graph.normal >= 0 ? Writer::Reg(graph.normal) + ".xyz" : w.Zero3()) + ";\n";
+    return w.out;
+}
+
+std::string GraphLightBody(const ShaderGraph& graph, GraphDialect dialect) {
+    Writer w{dialect, Stage::Light, {}};
+    if (graph.light < 0) return "        return " + w.Zero3() + ";\n";
+    w.Nodes(graph, {graph.light});
+    w.out += "        return max(" + Writer::Reg(graph.light) + ".rgb, " + w.Zero3() + ");\n";
+    return w.out;
+}
+
+std::string GraphPostBody(const ShaderGraph& graph, GraphDialect dialect) {
+    Writer w{dialect, Stage::Post, {}};
+    w.Nodes(graph, {graph.color});
+    w.out += "        return clamp(" + Writer::Reg(graph.color) + ".rgb, 0.0, " +
+             (graph.beforeToneMapping ? "65504.0" : "1.0") + ");\n";
     return w.out;
 }
 

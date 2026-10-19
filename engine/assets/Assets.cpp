@@ -15,6 +15,7 @@
 #include "assets/AnimationAsset.h"
 #include "assets/AnimationController.h"
 #include "audio/Wav.h"
+#include "render/ColorSpace.h"
 #include "render/Material.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
@@ -341,7 +342,9 @@ struct Loader {
             }
         }
         uint32_t base = static_cast<uint32_t>(mesh.positions.size());
-        // COLOR_0 (RGB or RGBA) multiplies the material color; primitives without it are white.
+        // COLOR_0 (RGB or RGBA, linear by the glTF specification) multiplies the material color; primitives
+        // without it are white.
+        if (color) mesh.linearColors = true;
         if (color && mesh.colors.size() < base) mesh.colors.resize(base, Vec4(1, 1, 1, 1));
         Mat4 normalMatrix = world.Inverse().Transposed();
         for (cgltf_size i = 0; i < pos->count; ++i) {
@@ -688,7 +691,7 @@ AssetManager::Entry<Mesh> AssetManager::LoadMesh(const std::string& path) {
     try {
         std::string full = engine_.ResolvePath(path);
         e.mtime = FileModifiedTime(full);
-        e.eventsMtime = FileModifiedTime(full + ".events.json");
+        e.sidecarMtime = FileModifiedTime(full + ".events.json");
         e.dependencies[full + ".clips.json"] = FileModifiedTime(full + ".clips.json");
         std::string text;
         if (ReadTextFile(full + ".clips.json", text)) {
@@ -728,9 +731,20 @@ AssetManager::Entry<Texture> AssetManager::LoadTexture(const std::string& path) 
         e.mtime = FileModifiedTime(full);
         std::vector<unsigned char> bytes;
         auto tex = std::make_shared<Texture>();
-        if (!ReadBinaryFile(full, bytes)) e.error = "texture file not found: " + path;
-        else if (DecodeImage(bytes.data(), bytes.size(), *tex, &e.error)) e.asset = tex;
-        else e.error = path + ": " + e.error;
+        // Import settings sidecar: {"sRGB": false} marks a data image (Texture::srgb).
+        e.sidecarMtime = FileModifiedTime(full + ".texture.json");
+        std::string settings, parseError;
+        if (ReadTextFile(full + ".texture.json", settings)) {
+            const Json json = Json::parse(settings, &parseError);
+            if (!parseError.empty() || !json.isObject() || (json.has("sRGB") && !json["sRGB"].isBool()))
+                e.error = path + ".texture.json: expected {\"sRGB\": true|false}";
+            else tex->srgb = json["sRGB"].asBool(true);
+        }
+        if (e.error.empty()) {
+            if (!ReadBinaryFile(full, bytes)) e.error = "texture file not found: " + path;
+            else if (DecodeImage(bytes.data(), bytes.size(), *tex, &e.error)) e.asset = tex;
+            else e.error = path + ": " + e.error;
+        }
     } catch (const std::exception& ex) {
         e.error = ex.what();
     }
@@ -748,7 +762,13 @@ AssetManager::Entry<EnvironmentMap> AssetManager::LoadEnvironment(const std::str
         int w = 0, h = 0;
         if (!ReadBinaryFile(full, bytes)) e.error = "environment image not found: " + path;
         else if (!DecodeImageFloat(bytes.data(), bytes.size(), rgb, w, h, &e.error)) e.error = path + ": " + e.error;
-        else e.asset = BuildEnvironmentMap(rgb.data(), w, h);
+        else {
+            // Linear lighting: an 8-bit image stores sRGB; a Radiance .hdr is linear light, which
+            // DecodeImageFloat turned into display values (power 1 / 2.2).
+            const bool hdr = EndsWith(Lower(path), ".hdr");
+            if (linearColor_) for (float& c : rgb) c = hdr ? std::pow(c, 2.2f) : SrgbToLinear(c);
+            e.asset = BuildEnvironmentMap(rgb.data(), w, h);
+        }
     } catch (const std::exception& ex) {
         e.error = ex.what();
     }
@@ -770,7 +790,8 @@ AssetManager::Entry<Material> AssetManager::LoadMaterial(const std::string& path
             TextureLoader load = [this](const std::string& p, std::string* err) { return GetTexture(p, err); };
             if (!parseError.empty()) e.error = path + ": " + parseError;
               else if (MaterialFromJson(j, load, *mat, &e.error,
-                  [this](const std::string& p, std::string* err) { return GetShader(p, err); })) e.asset = mat;
+                  [this](const std::string& p, std::string* err) { return GetShader(p, err); },
+                  [this](const std::string& p, std::string* err) { return GetMaterial(p, err); })) e.asset = mat;
             else e.error = path + ": " + e.error;
         }
     } catch (const std::exception& ex) {
@@ -834,7 +855,20 @@ std::shared_ptr<const ShaderGraph> AssetManager::GetShader(const std::string& pa
 
 std::shared_ptr<const Material> AssetManager::GetMaterial(const std::string& path, std::string* error) {
     auto it = materials_.find(path);
-    if (it == materials_.end()) it = materials_.emplace(path, LoadMaterial(path)).first;
+    if (it == materials_.end()) {
+        // A material is cached once it has loaded, so a nextPass chain that comes back to a material
+        // still loading is a cycle (a.mat.json -> b.mat.json -> a.mat.json).
+        if (std::find(materialsLoading_.begin(), materialsLoading_.end(), path) != materialsLoading_.end()) {
+            std::string chain;
+            for (const std::string& p : materialsLoading_) chain += p + " -> ";
+            if (error) *error = "nextPass cycle: " + chain + path;
+            return nullptr;
+        }
+        materialsLoading_.push_back(path);
+        Entry<Material> entry = LoadMaterial(path);
+        materialsLoading_.pop_back();
+        it = materials_.emplace(path, std::move(entry)).first;
+    }
     if (error) *error = it->second.error;
     return it->second.asset;
 }
@@ -1088,7 +1122,7 @@ std::vector<std::string> AssetManager::PollChanges() {
     for (auto& kv : meshes_) {
         bool dependencyChanged = false;
         for (const auto& dep : kv.second.dependencies) dependencyChanged = dependencyChanged || FileModifiedTime(dep.first) != dep.second;
-        if (dependencyChanged || mtimeOf(kv.first) != kv.second.mtime || mtimeOf(kv.first + ".events.json") != kv.second.eventsMtime) {
+        if (dependencyChanged || mtimeOf(kv.first) != kv.second.mtime || mtimeOf(kv.first + ".events.json") != kv.second.sidecarMtime) {
             kv.second = LoadMesh(kv.first);
             changed.push_back(kv.first);
         }
@@ -1116,7 +1150,7 @@ std::vector<std::string> AssetManager::PollChanges() {
         if (mtimeOf(kv.first) != kv.second.mtime) { kv.second = LoadSkeleton2D(kv.first); changed.push_back(kv.first); }
     }
     for (auto& kv : textures_) {
-        if (mtimeOf(kv.first) != kv.second.mtime) {
+        if (mtimeOf(kv.first) != kv.second.mtime || mtimeOf(kv.first + ".texture.json") != kv.second.sidecarMtime) {
             kv.second = LoadTexture(kv.first);
             changed.push_back(kv.first);
         }
@@ -1139,14 +1173,20 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
-    // Materials hold texture/graph pointers, so dependency changes reload them too.
-    bool texturesChanged = !changed.empty();
-    for (auto& kv : materials_) {
-        if (texturesChanged || mtimeOf(kv.first) != kv.second.mtime) {
-            bool fileChanged = mtimeOf(kv.first) != kv.second.mtime;
-            kv.second = LoadMaterial(kv.first);
-            if (fileChanged) changed.push_back(kv.first);
+    // Materials hold texture/graph pointers and other materials (nextPass): when anything they may hold
+    // changed, all of them load again, so no material keeps a stale pass.
+    bool reloadMaterials = !changed.empty();
+    std::vector<std::string> materialPaths;
+    for (const auto& kv : materials_) {
+        materialPaths.push_back(kv.first);
+        if (mtimeOf(kv.first) != kv.second.mtime) {
+            reloadMaterials = true;
+            changed.push_back(kv.first);
         }
+    }
+    if (reloadMaterials) {
+        materials_.clear();
+        for (const std::string& p : materialPaths) GetMaterial(p);
     }
     for (auto& kv : fonts_) {
         if (mtimeOf(kv.first) != kv.second.mtime) {
@@ -1177,6 +1217,7 @@ void AssetManager::Forget(const std::string& path) {
     meshes_.erase(path);
     textures_.erase(path);
     environments_.erase(path);
+    if (KindOf(path) == "material") materials_.clear();  // other materials may hold it as their nextPass
     materials_.erase(path);
     fonts_.erase(path);
     tilesets_.erase(path);
@@ -1318,6 +1359,7 @@ Json AssetManager::Info(const std::string& path) {
         std::string error;
         auto graph = GetShader(path, &error);
         if (!graph) throw ApiError("invalid_shader", error, "Validate it with shader.check.");
+        out["stage"] = graph->stage == ShaderStage::Post ? "post" : "surface";
         out["nodes"] = static_cast<int>(graph->instructions.size());
         out["color"] = graph->color;
         out["emissive"] = graph->emissive;

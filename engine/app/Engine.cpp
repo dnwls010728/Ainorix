@@ -38,9 +38,17 @@ std::string Lower(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
+
+std::string& DefaultGpuShaderCache() {
+    static std::string dir;
+    return dir;
+}
 }  // namespace
 
+void Engine::SetDefaultGpuShaderCache(const std::string& cacheDir) { DefaultGpuShaderCache() = cacheDir; }
+
 Engine::Engine() : assets_(std::make_unique<AssetManager>(*this)), renderer_(std::make_unique<SoftwareRenderer>(assets_.get())) {
+    gpuShaderCache_ = DefaultGpuShaderCache();
     assets_->SetProbeScene(&scene_);
     scripts_ = std::make_unique<ScriptHost>(*this);
     physics_ = std::make_unique<PhysicsWorld>();
@@ -57,6 +65,15 @@ Engine::~Engine() { EnableNetworkWatchdog(false); }
 namespace {
 int64_t SteadyMicroseconds() {
     return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// project.json "rendering": {"colorSpace": "gamma" (default) | "linear"} (render/ColorSpace.h).
+bool ProjectColorSpace(const Json& project, bool& linear, std::string* error) {
+    const Json& space = project["rendering"]["colorSpace"];
+    linear = space.asString("gamma") == "linear";
+    if (space.isNull() || space.asString("") == "gamma" || linear) return true;
+    if (error) *error = "project.json: rendering.colorSpace must be \"gamma\" or \"linear\"";
+    return false;
 }
 }  // namespace
 
@@ -115,6 +132,9 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
         }
         SessionConfig config;
         if (!SessionConfig::Parse(project, config, error)) return false;
+        bool linear = false;
+        if (!ProjectColorSpace(project, linear, error)) return false;
+        assets_->SetLinearColor(linear);
         ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
         ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0; networkConfig_ = config;
         projectDir_ = ParentPath(projectFile);
@@ -135,6 +155,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
     }
 
     // A bare scene file: use the nearest enclosing project if there is one.
+    assets_->SetLinearColor(false);
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0; networkConfig_ = SessionConfig{};
     std::string dir = ParentPath(path);
@@ -146,6 +167,9 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
             ReadTextFile(JoinPath(d, "project.json"), text);
             Json project = Json::parse(text);
             if (!SessionConfig::Parse(project, networkConfig_, error)) return false;
+            bool linear = false;
+            if (!ProjectColorSpace(project, linear, error)) return false;
+            assets_->SetLinearColor(linear);
             projectName_ = project["name"].asString("Untitled");
             break;
         }
@@ -1156,6 +1180,7 @@ bool Engine::EnableGpu(Window* window, std::string* error) {
     GpuRenderer::Settings settings;
     settings.shaderCacheDir = gpuShaderCache_;
     settings.asyncShaders = gpuAsyncShaders_;
+    settings.compileGraphs = gpuCompileGraphs_;
     gpu_ = std::make_unique<GpuRenderer>(*gpuDevice_, assets_.get(), settings);
     OE_LOG_INFO("render", "GPU renderer ready: %s", gpu_->Name());
     gpu_->Preload(preloadMaterials_, preloadTextures_, preloadMeshes_);

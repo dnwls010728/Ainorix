@@ -1,7 +1,7 @@
 # Camera post-processing and shader materials
 
 `PostProcess` on the active camera applies screen-space effects (exposure and tone mapping, bloom, vignette, depth
-of field, SSR, FXAA) in both renderers, and `.shader.json` surface graphs give materials programmable color, emission,
+of field, SSR, FXAA, post graphs) in both renderers, and `.shader.json` surface graphs give materials programmable color, emission,
 vertex offset and normals. Open items are listed under Status at the end.
 
 ## Initial contract
@@ -33,6 +33,12 @@ at rendering time; non-finite values fall back to safe defaults. The vignette
 multiplies scene display-color channels by a cubic smoothstep falloff before
 overlays, after exposure and tone mapping when enabled.
 
+`vignetteColor` (default black) is what the edges blend toward: the factor is
+`mix(1, vignetteColor, vignette * falloff)` per channel, so black gives the plain
+darkening above and a warm brown (`[0.62, 0.42, 0.28]`, `games/Kongal`) a sepia,
+painted edge, like the color parameter of Unity's URP Vignette. Test:
+`PostProcessVignetteColor`.
+
 ## Exposure and HDR tone mapping
 
 PostProcess.exposure is a brightness multiplier (0..32, default 1).
@@ -56,10 +62,12 @@ Only the final display image is quantized to RGBA8. With exposure 0.25, emissive
 RGB (8,4,2) becomes (2,1,0.5), or (2/3,1/2,1/3) with Reinhard enabled; clipping
 the scene to RGBA8 first would lose that distinction.
 
-The color convention remains the engine's existing numeric RGB convention:
-textures and material colors are used directly, without additional sRGB decode
-or encode. This is an explicit compatibility choice, not a color-managed ACES
-pipeline. CPU/GPU precision and MSAA can cause small differences; deterministic
+By default colors keep the engine's numeric RGB convention: textures and
+material colors are used directly, without sRGB decode or encode. A project with
+`"rendering": {"colorSpace": "linear"}` lights in linear space instead: it always
+uses the float scene buffer, and the composite encodes to sRGB right after tone
+mapping (before grading, vignette, FXAA and the post graph); see
+[RENDERING.md](RENDERING.md#color-space). CPU/GPU precision and MSAA can cause small differences; deterministic
 hashes use the software renderer. Neutral settings retain the original RGBA8
 path and its hashes, including vignette-only scenes.
 
@@ -256,6 +264,67 @@ Disabling FXAA avoids its intermediate allocation/pass and preserves previous
 frame hashes. Depth and entity IDs are never filtered. Sampling across small
 features may soften them; pixel-art cameras should leave it disabled.
 
+## Post graphs
+
+`PostProcess.shader` names a `*.shader.json` with `"stage": "post"`: a graph that gives each pixel its color,
+by default running last on the display image (after tone mapping, grading, vignette and FXAA), the way Unreal post process
+materials, Unity URP full screen passes or a three.js `ShaderPass` do. `PostProcess.shaderUniforms` overrides
+its uniform defaults (`{name: number or [x,y,z,w]}`; scripts may change it every frame). Empty = none.
+
+```json
+{"format": "ownengine.shader", "stage": "post", "uniforms": {"gain": 1},
+ "nodes": [{"op": "uv"}, {"op": "sceneColor", "args": [0]}, {"op": "constant", "value": 1},
+           {"op": "subtract", "args": [2, 1]}, {"op": "uniform", "name": "gain"}, {"op": "multiply", "args": [3, 4]}],
+ "color": 5}
+```
+
+A post graph has only the `color` output and up to 128 nodes, as a surface graph. Its optional `injection` field chooses when it runs:
+
+- `"afterToneMapping"` (default): reads the quantized display image and clamps output rgb to 0..1, preserving existing graphs.
+- `"beforeToneMapping"`: reads the rendered scene after depth of field, before bloom, exposure, tone mapping,
+  sRGB encoding, grading, vignette and FXAA. `sceneColor` and `sceneBlur` read scene-referred values, which may
+  exceed 1: linear HDR light in a linear project, plain color numbers in a gamma project. Output rgb is finite
+  and saturated to 0..65504, replacing scene color for the remaining stack. Bloom extracts highlights from this
+  output, so a graph can create or suppress bloom. Only post graphs accept `injection`.
+
+Its inputs (the image is scene color for `beforeToneMapping`, display color otherwise):
+
+| Operation | Args | Behavior |
+|---|---:|---|
+| uv | 0 | Screen position 0..1 of the pixel center, (0,0) at the top left |
+| texel | 0 | (1/width, 1/height, width, height) of the display image |
+| time | 0 | Fixed simulation time |
+| sceneColor | 1 | The image at uv (xy), bilinear with clamped edges, alpha 1; through FXAA only for `afterToneMapping` when `fxaa` is on |
+| sceneBlur | 2 | 5x5 gaussian of the image around uv (a.xy), samples b.x pixels apart, weights exp(-(i*i + j*j) * 0.35) |
+
+Surface inputs (position, normal, baseColor, texture, particle*) are rejected, as are post inputs in a surface
+graph; `noise`, `fbm`, `pow`, `length` and `smoothstep` (in the operation table below) work in both stages.
+Pixel-sized effects scale with `texel` (multiply uv by its zw for pixel coordinates).
+
+For `afterToneMapping`, both renderers read the same quantized RGBA8 display image (the one FXAA reads): the GPU
+writes it to the FXAA source target first. For `beforeToneMapping`, the GPU runs a full-screen graph pass into
+a separate RGBA16F scene target before bloom; the software renderer evaluates from an immutable float scene
+image into its HDR buffer at the same point. Like surface graphs, each post graph gets its own
+compiled program: `GraphPostBody` (GraphSource.cpp) replaces the body of `PostGraph` in the generated composite
+shader with straight-line code that reads its inputs through `PostUniform`/`PostTime`/`PostTexel`/`PostScene`/
+`PostBlur`, compiled on first use (in the background with async shaders) and cached per graph. Until it is ready,
+or if it fails to compile, the composite interpreter runs the graph from its instructions as uniforms; it holds
+64 nodes, so a longer graph is skipped for those frames. `render.screenshot` reports which path ran in
+`stats.postGraph` (`compiled`, `interpreted`, `skipped`, or `software`). The software renderer evaluates the graph
+with `EvaluateShaderGraph`. A missing graph, a surface graph or a bad uniform is skipped with one log warning per
+problem; `shader.check` validates it. Test: `PostProcessGraph` (a 100-node graph runs compiled and matches the CPU).
+
+Helper functions that compiled graphs call never write their parameters: SPIRV-Cross turns a written parameter
+into `inout`, and `GraphFbm(oeg5.xyz)` would then change the register it was given (found by `PostProcessGraph`
+before `GraphFbm`/`GraphHash` copied their inputs).
+
+Test: `PostProcessGraphInjection` (validation, the unchanged default, HDR scene values in and out, bloom of the
+graph's output, gamma and linear display conversion, compiled and interpreted GPU paths against the CPU).
+
+`games/Kongal/shaders/watercolor.shader.json` (64 nodes) is the watercolor pass of the three.js prototype:
+edges that wander with fbm, bleed toward `sceneBlur`, pigment pooling where the color differs from the blur,
+blotchy wash density (`pow`), granulation and paper tooth.
+
 ## Fog, color grading and ACES
 
 Distance fog and color grading live on the same `PostProcess` component; all neutral defaults leave
@@ -317,7 +386,7 @@ Each node's args contains indices of earlier nodes; cycles and forward reference
 are rejected. color references the RGBA output, and optional emissive references
 an RGB output. All registers are four-vectors. Scalar constants/uniform defaults
 broadcast to all channels; vector values must have exactly four finite numbers
-in -65504..65504. Up to 48 nodes and 8 named uniform defaults are supported.
+in -65504..65504. Up to 128 nodes and 8 named uniform defaults are supported.
 Per-material overrides must name declared uniforms and preserve unspecified
 values. Node outputs saturate to -65504..65504; NaN becomes zero. Division by
 zero returns zero for that channel. This gives the GPU a finite bounded program
@@ -332,10 +401,20 @@ division rules. Lighting code therefore stays in one place. The generated code
 reads its inputs only through the `Graph*`/`VGraph*` helper functions in
 `Shaders.glsl`; keep those names when editing it. A graph whose program does not
 compile logs a warning and is interpreted by the general shader instead (the
-loops in `SurfaceGraph`/`VertexOffset`), which gives the same picture more slowly.
+loops in `SurfaceGraph`/`VertexOffset`), which gives the same picture more slowly;
+the same happens while a program compiles in the background (the editor). The
+interpreter holds graphs of up to 48 nodes (`ShaderGraph::kMaxInterpretedSurfaceNodes`;
+a larger one draws as its plain material until its program is ready). It reads the
+graph from uniforms with four packed instructions per vec4 (`GraphCode`: opcode +
+128 * (a + 48 * (b + 48 * c)), exact in a highp float), which keeps `mesh_fs` inside
+the GLES3/WebGL2 minimum of 224 fragment uniform vectors with room for new material
+parameters (test `SpotLightRendering` checks the budget). `GpuRenderer::Settings::compileGraphs`
+(`Engine::SetGpuCompileGraphs(false)`) keeps every graph on the interpreter to check
+it; test `ShaderGraphInterpreterAndLargeGraphs`.
 The first frame that uses a graph pays its shader compile.
 
-Two more optional outputs sit next to `color` and `emissive`:
+Three more optional outputs sit next to `color` and `emissive` (the third, `light`, is described in
+[Light stage](#light-stage-custom-lighting)):
 
 - `"offset": <node index>` displaces vertices. The node's xyz is added to each
   vertex's world position. It is evaluated per vertex, in both renderers, and only
@@ -403,7 +482,7 @@ Example: a sine wave along world x that moves with time lifts the vertices of a
 }
 ```
 
-Three uniform names are reserved: a graph that declares `cameraPosition` receives the
+Five uniform names are reserved: a graph that declares `cameraPosition` receives the
 rendering view's world position (w = 1), one that declares `lightDirection` receives the
 unit vector toward the first directional light (w = 0), and one that declares `playing`
 receives 1 while the game is played (a play session exists: running or paused, in the editor,
@@ -411,6 +490,11 @@ receives 1 while the game is played (a play session exists: running or paused, i
 editor's Scene and stopped Game view, `oe render` without `--frames`, effect previews), every
 frame and in both renderers. Multiply by `playing` what would be in the way while editing: a
 world that bends away from the camera is flat until Play is pressed.
+Two more give graphs the screen, as Unity's `_ScreenParams` or Godot's `VIEWPORT_SIZE` do: `screenSize`
+receives (width, height, 1/width, 1/height) of the render target in pixels, and `pixelScale` the world size
+of one pixel: at view distance d it is `d * pixelScale.x + pixelScale.y` (perspective: x = 2 tan(fov/2) /
+height, y = 0; orthographic: x = 0, y = 2 * orthoSize / height). Multiplying an `offset` by that size keeps
+it a fixed number of pixels on screen (the pixel outlines of [RENDERING.md](RENDERING.md#outlines) do).
 Declared defaults and material overrides for these names are replaced, so view- and
 light-dependent graphs follow a moving camera or sun without material edits
 They still count toward the eight uniforms. Graphs without these
@@ -420,7 +504,12 @@ declared defaults in place.
 Inputs: uv, world position, world normal, fixed simulation time (broadcast),
 baseColor RGBA, and texture(args UV) for the material's base texture. Missing
 textures sample white. Both renderers supply these interpolated fragment inputs
-to the shared graph contract.
+to the shared graph contract. In the fragment stage `baseColor` is the surface
+color *with* the base texture already applied (material base color x tint x
+vertex color x texture sample at the mesh uv); use it alone for a textured
+surface, and `texture` only to sample the image at other coordinates. Multiplying
+the two squares the texture (a yellow texture turns orange). In the vertex stage
+`baseColor` has no texture (see `offset` above).
 
 Operations and argument counts:
 
@@ -440,6 +529,49 @@ Operations and argument counts:
 | dot | 2 | Four-channel dot product, broadcast |
 | normalize | 1 | Four-vector length; length <=1e-8 gives zero |
 | swizzle | 1 | value contains four channel indices 0..3 |
+| pow | 2 | a to the power b per channel; 0 where a <= 0 (also for b = 0) |
+| length | 1 | Four-channel length, broadcast |
+| smoothstep | 3 | Smooth 0..1 ramp of c between edges a and b per channel; equal edges act as step(a, c) |
+| noise | 1 | 3D value noise of a.xyz in 0..1 (cells of size 1; the hash13 of the three.js prototype), broadcast |
+| fbm | 1 | Four octaves of noise (lacunarity 2.03, gain 0.5, about 0..0.94), broadcast |
+| uv / texel / time / sceneColor / sceneBlur | | Post stage inputs, see [Post graphs](#post-graphs) |
+| ambient | 0 | Surface fragments: the scene's diffuse ambient light where the normal points (image environment, sky colors or the flat/hemisphere ambient), rgb |
+| lightVector / lightColor / lightAttenuation | 0 | Light stage only: unit vector toward the light, its color times intensity, and how much arrives (distance falloff, spot cone, shadow); see [Light stage](#light-stage-custom-lighting) |
+| viewDirection | 0 | Surface, every stage: unit vector from the surface toward the camera (xyz, w = 0), like Unity's View Direction; an orthographic camera gives its axis everywhere. Rim light: `pow(1 - dot(normal, viewDirection), k)` |
+| objectPosition | 0 | Surface, every stage: the position in the mesh's own space (xyz, w = 1), like Unity's Position (Object): the rest pose of a skinned mesh, before `offset`, so a pattern over it stays on the surface while the object moves or animates. A graph that reads it is drawn unbatched by the GPU renderer (its sprite/mesh batches are in world space) |
+
+### Light stage (custom lighting)
+
+A lit material's graph can shade the surface itself, like Godot's `light()` function or a custom lighting
+function in Unity's Shader Graph: give it a `light` output. The engine then shows `color` (the ambient part,
+times ambient occlusion) plus, for every light it shades with (each directional light, the point lights and spot
+lights in range), the graph's `light` output for that light. The PBR model, image-based reflections and
+reflection probes are skipped for that surface; `emissive` still adds.
+
+```json
+{"format": "ownengine.shader",
+ "nodes": [{"op": "baseColor"}, {"op": "ambient"}, {"op": "multiply", "args": [0, 1]},
+           {"op": "normal"}, {"op": "lightVector"}, {"op": "dot", "args": [3, 4]}, {"op": "constant", "value": 0},
+           {"op": "max", "args": [5, 6]}, {"op": "lightColor"}, {"op": "lightAttenuation"},
+           {"op": "multiply", "args": [7, 9]}, {"op": "multiply", "args": [8, 10]}, {"op": "multiply", "args": [0, 11]}],
+ "color": 2, "light": 12}
+```
+
+That is Lambert; a toon material bands `dot(normal, lightVector)` instead (`games/Kongal/tools/make_toon.cjs`), and
+shadows cut the band through `lightAttenuation` (the sun's shadow map, local shadows of point and spot lights).
+
+- `lightVector`, `lightColor` and `lightAttenuation` exist only in the light stage: `color`, `emissive`, `normal`
+  and `offset` must not depend on them (`shader.create`/`shader.check` name the node). Everything else, `ambient`
+  and the surface inputs included, may feed both. `baseColor` is the surface color before the graph.
+- The light output is added as it is (negative channels count as zero), once per light; `unlit` materials and
+  post graphs have no light stage.
+- GPU: only the compiled graph program has the light stage (`GraphLightBody` replaces `LightGraph` in mesh_fs). An
+  interpreter there would sit inside the light loop, and the D3D compiler unrolls that into minutes of compile
+  for every program. While the program compiles in the background, or when it failed (logged), the GPU shades
+  the graph's `color` with the standard lighting instead (`PutGraph` sends no light output). The software
+  renderer evaluates it with `EvaluateShaderLight` (`Lighting::ShadeGraph`).
+
+Test: `MaterialLightGraph` (Lambert with a cast shadow, the ambient input and a point light, GPU against CPU).
 
 `MeshRenderer.shaderUniforms` overrides graph uniforms per entity: `{name: number or [x, y, z, w]}`.
 Unnamed uniforms keep the material's values, so entities sharing one material file can draw
@@ -472,7 +604,7 @@ packaged graph execution is verified.
 
 ## Status
 
-Implemented in both renderers: vignette, exposure with Reinhard/ACES tone mapping, bloom, ambient-only SSAO, screen-space reflections, depth of field,
+Implemented in both renderers: post graphs, vignette, exposure with Reinhard/ACES tone mapping, bloom, ambient-only SSAO, screen-space reflections, depth of field,
 FXAA, distance fog, colour grading and surface shader graphs (colour, emission, normal and vertex offset
 outputs, `MeshRenderer.shaderUniforms`, reserved `cameraPosition`/`lightDirection`). The committed web and
 Android players include all of them.

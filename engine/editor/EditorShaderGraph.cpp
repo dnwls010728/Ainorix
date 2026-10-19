@@ -1,17 +1,19 @@
 #include "editor/EditorShaderGraph.h"
+#include <algorithm>
 #include <functional>
 #include <cmath>
 #include "render/ShaderGraph.h"
 
 namespace oe {
 namespace {
-const char* kOutputs[] = {"color", "emissive", "normal", "offset"};
+const char* kOutputs[] = {"color", "emissive", "normal", "offset", "light"};
 
 bool Dependencies(const Json& document, bool disconnected, std::vector<int>& order, std::string* error) {
     const Json& nodes = document["nodes"];
     auto fail = [&](const std::string& message) { if (error) *error = message; return false; };
-    if (!nodes.isArray() || nodes.size() == 0 || nodes.size() > ShaderGraph::kMaxNodes)
-        return fail("nodes must contain 1..48 instructions");
+    const int most = EditorShaderMaxNodes();
+    if (!nodes.isArray() || nodes.size() == 0 || static_cast<int>(nodes.size()) > most)
+        return fail("nodes must contain 1.." + std::to_string(most) + " instructions");
     std::vector<int> state(nodes.size(), 0);
     std::function<bool(int)> visit = [&](int index) {
         if (state[static_cast<size_t>(index)] == 1) return fail("shader connections must not form a cycle");
@@ -37,15 +39,29 @@ bool Dependencies(const Json& document, bool disconnected, std::vector<int>& ord
 const std::vector<std::string>& EditorShaderOperations() {
     static const std::vector<std::string> operations = {"constant", "uniform", "uv", "position", "normal", "time", "baseColor",
         "texture", "add", "subtract", "multiply", "divide", "min", "max", "sin", "cos", "floor", "fract", "abs",
-        "clamp", "mix", "step", "dot", "normalize", "swizzle", "particleAge", "particleRandom", "particleSpeed", "particleCustom0", "particleCustom1", "particleCustom2", "particleCustom3"};
+        "clamp", "mix", "step", "dot", "normalize", "swizzle", "particleAge", "particleRandom", "particleSpeed", "particleCustom0", "particleCustom1", "particleCustom2", "particleCustom3",
+        "pow", "length", "smoothstep", "noise", "fbm", "ambient", "lightVector", "lightColor", "lightAttenuation",
+        "viewDirection", "objectPosition", "sceneColor", "sceneBlur", "texel"};
     return operations;
 }
 
+bool EditorShaderOperationInStage(const std::string& op, bool post) {
+    static const std::vector<std::string> surfaceOnly = {"position", "normal", "baseColor", "texture", "ambient", "lightVector",
+        "lightColor", "lightAttenuation", "particleAge", "particleRandom", "particleSpeed", "particleCustom0", "particleCustom1",
+        "particleCustom2", "particleCustom3", "viewDirection", "objectPosition"};
+    const bool postOnly = op == "sceneColor" || op == "sceneBlur" || op == "texel";
+    return post ? std::find(surfaceOnly.begin(), surfaceOnly.end(), op) == surfaceOnly.end() : !postOnly;
+}
+
+bool EditorShaderIsPost(const Json& document) { return document["stage"].asString("") == "post"; }
+
+int EditorShaderMaxNodes() { return ShaderGraph::kMaxNodes; }
+
 int EditorShaderArity(const std::string& op) {
-    for (const char* name : {"constant", "uniform", "uv", "position", "normal", "time", "baseColor", "particleAge", "particleRandom", "particleSpeed", "particleCustom0", "particleCustom1", "particleCustom2", "particleCustom3"}) if (op == name) return 0;
-    for (const char* name : {"texture", "sin", "cos", "floor", "fract", "abs", "normalize", "swizzle"}) if (op == name) return 1;
-    for (const char* name : {"add", "subtract", "multiply", "divide", "min", "max", "step", "dot"}) if (op == name) return 2;
-    if (op == "clamp" || op == "mix") return 3;
+    for (const char* name : {"constant", "uniform", "uv", "position", "normal", "time", "baseColor", "particleAge", "particleRandom", "particleSpeed", "particleCustom0", "particleCustom1", "particleCustom2", "particleCustom3", "ambient", "lightVector", "lightColor", "lightAttenuation", "viewDirection", "objectPosition", "texel"}) if (op == name) return 0;
+    for (const char* name : {"texture", "sin", "cos", "floor", "fract", "abs", "normalize", "swizzle", "length", "noise", "fbm", "sceneColor"}) if (op == name) return 1;
+    for (const char* name : {"add", "subtract", "multiply", "divide", "min", "max", "step", "dot", "pow", "sceneBlur"}) if (op == name) return 2;
+    if (op == "clamp" || op == "mix" || op == "smoothstep") return 3;
     return -1;
 }
 

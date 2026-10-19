@@ -21,6 +21,12 @@ std::string GraphSurfaceBody(const ShaderGraph& graph, GraphDialect dialect);
 // Body of `vec3 VertexOffset(wpos, nrm, uv)`: the instructions up to the `offset` output, or
 // a zero offset for graphs without one.
 std::string GraphVertexBody(const ShaderGraph& graph, GraphDialect dialect);
+// Body of `vec3 LightGraph(uv, normal, base, alpha, light_vector, light_color, light_atten)`: the instructions up
+// to the `light` output (what one light adds, at least zero), or zero for graphs without one.
+std::string GraphLightBody(const ShaderGraph& graph, GraphDialect dialect);
+// Body of `vec3 PostGraph(uv)` in composite_fs for a post graph (stage post): its color, clamped to 0..1.
+// Inputs come through the composite helpers PostUniform/PostTime/PostTexel/PostScene/PostBlur.
+std::string GraphPostBody(const ShaderGraph& graph, GraphDialect dialect);
 // Replaces the body of the function `name` defined in generated shader `source` (the first line
 // that declares `name(` and is followed by a brace block). False when there is no such function.
 bool ReplaceFunctionBody(std::string& source, const std::string& name, const std::string& body);

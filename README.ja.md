@@ -106,8 +106,8 @@ Assets はグリッド/リスト表示、名前・パス検索、件数付きの
 
 | 分野 | 内容 | ドキュメント |
 |---|---|---|
-| レンダリング | 1 つのシーンを描く 2 つのレンダラー: GPU (sokol_gfx: D3D11、WebGL2、GLES3、MSAA、フィルター付き影) と決定的なマルチスレッドのソフトウェアレンダラー。glTF / FBX モデル、PBR マテリアル、透過、点光源、スポットライトと平行光源、カスケードシャドウとローカルライトの影 | [RENDERING](docs/RENDERING.md) |
-| ポストプロセスとシェーダー | 露出と Reinhard/ACES トーンマッピング、ブルーム、ビネット、FXAA、環境光 SSAO、probe/sky フォールバック付きの光沢面のスクリーンスペース反射、被写界深度、距離フォグ、カラーグレーディング。色、発光、頂点オフセット、法線を出力できるサーフェスシェーダーグラフ (`.shader.json`)、スプライトにも適用可能 | [POSTPROCESS](docs/POSTPROCESS.md) |
+| レンダリング | 1 つのシーンを描く 2 つのレンダラー: GPU (sokol_gfx: D3D11、WebGL2、GLES3、MSAA、フィルター付き影) と決定的なマルチスレッドのソフトウェアレンダラー。glTF / FBX モデル、PBR マテリアル、マテリアルパス（`cull`、`nextPass`）、トゥーンアウトライン、透過、点光源、スポットライトと平行光源、カスケードシャドウとローカルライトの影 | [RENDERING](docs/RENDERING.md) |
+| ポストプロセスとシェーダー | リニア/ガンマ色空間、ライトごとのカスタムライティンググラフ、露出と Reinhard/ACES トーンマッピング、ブルーム、ビネット、FXAA、ポストプロセスのシェーダーグラフ（`"stage": "post"`: sceneColor/sceneBlur、noise、fbm。`games/Kongal` に水彩の例）、環境光 SSAO、probe/sky フォールバック付きの光沢面のスクリーンスペース反射、被写界深度、距離フォグ、カラーグレーディング。色、発光、頂点オフセット、法線を出力できるサーフェスシェーダーグラフ (`.shader.json`)、スプライトにも適用可能 | [POSTPROCESS](docs/POSTPROCESS.md) |
 | 平面反射 | 平面メッシュに動くシーンを映す鏡・水面。ビューごとに一つの反射面、両レンダラー共通のクリッピング | [PLANAR_REFLECTION](docs/PLANAR_REFLECTION.md) |
 | ボックスデカール | 汚れ・着弾跡・床のマークを投影。順序付きベースカラー合成、ボックス・法線フェード、ビューごとに16個 | [DECALS](docs/DECALS.md) |
 | パーティクル衝突 | 静的な3D/2Dコライダーで停止・反射・消滅。固定ステップの中心軌道検査、生成時の反発・摩擦設定、death chain | [PARTICLE_COLLISION](docs/PARTICLE_COLLISION.md) |

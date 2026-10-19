@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <string>
+#include <unordered_map>
 
 namespace oe {
 
@@ -24,18 +26,25 @@ Color Texture::Sample(float u, float v) const {
     return top * (1 - ty) + bottom * ty;
 }
 
-Color Texture::Sample(float u, float v, bool nearest, float* alpha) const {
+Color Texture::Sample(float u, float v, bool nearest, float* alpha, bool decode) const {
     if (width <= 0 || height <= 0) {
         if (alpha) *alpha = 1.0f;
         return Color(1, 1, 1);
     }
+    // One byte as a 0..255 value: decoded through a table (SrgbToLinear of byte / 255, times 255) or as it is.
+    static const std::array<float, 256> kDecoded = [] {
+        std::array<float, 256> table{};
+        for (int i = 0; i < 256; ++i) table[static_cast<size_t>(i)] = SrgbToLinear(static_cast<float>(i) / 255.0f) * 255.0f;
+        return table;
+    }();
+    auto channel = [&](uint32_t byte) { return decode ? kDecoded[byte] : static_cast<float>(byte); };
     auto wrap = [](int i, int n) { i %= n; return i < 0 ? i + n : i; };
     auto texel = [&](int px, int py) { return texels[static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)]; };
     if (nearest) {
         uint32_t c = texel(wrap(static_cast<int>(std::floor(u * static_cast<float>(width))), width),
                            wrap(static_cast<int>(std::floor(v * static_cast<float>(height))), height));
         if (alpha) *alpha = static_cast<float>(c >> 24) / 255.0f;
-        return Color((c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f);
+        return Color(channel(c & 0xFF) / 255.0f, channel((c >> 8) & 0xFF) / 255.0f, channel((c >> 16) & 0xFF) / 255.0f);
     }
     float x = u * static_cast<float>(width) - 0.5f;
     float y = v * static_cast<float>(height) - 0.5f;
@@ -46,9 +55,9 @@ Color Texture::Sample(float u, float v, bool nearest, float* alpha) const {
     float r = 0, g = 0, b = 0, a = 0;
     auto add = [&](int px, int py, float w) {
         uint32_t c = texel(px, py);
-        r += w * static_cast<float>(c & 0xFF);
-        g += w * static_cast<float>((c >> 8) & 0xFF);
-        b += w * static_cast<float>((c >> 16) & 0xFF);
+        r += w * channel(c & 0xFF);
+        g += w * channel((c >> 8) & 0xFF);
+        b += w * channel((c >> 16) & 0xFF);
         a += w * static_cast<float>(c >> 24);
     };
     add(x0, y0, (1 - tx) * (1 - ty));
@@ -93,6 +102,7 @@ std::shared_ptr<Mesh> Mesh::Morphed(const std::vector<std::pair<int, float>>& we
     out->normals = normals;
     out->uvs = uvs;
     out->colors = colors;
+    out->linearColors = linearColors;
     out->particleCustom = particleCustom;
     out->particleData = particleData;
     out->tangents = tangents;
@@ -261,6 +271,19 @@ void Mesh::ComputeNormals() {
         for (int k = 0; k < 3; ++k) normals[indices[i + static_cast<size_t>(k)]] += n;
     }
     for (Vec3& n : normals) n = Normalize(n);
+}
+
+std::vector<Vec3> Mesh::SmoothNormals() const {
+    std::vector<Vec3> smooth(positions.size(), Vec3(0, 1, 0));
+    std::unordered_map<std::string, Vec3> sums;
+    auto key = [&](size_t i) { return std::string(reinterpret_cast<const char*>(&positions[i]), sizeof(Vec3)); };
+    for (size_t i = 0; i < positions.size() && i < normals.size(); ++i) sums[key(i)] += normals[i];
+    for (size_t i = 0; i < positions.size(); ++i) {
+        const Vec3 own = i < normals.size() ? normals[i] : Vec3(0, 1, 0);
+        const Vec3 sum = sums[key(i)];
+        smooth[i] = Length(sum) > 1e-4f ? Normalize(sum) : own;
+    }
+    return smooth;
 }
 
 namespace {

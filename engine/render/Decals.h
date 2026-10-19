@@ -27,7 +27,8 @@ std::vector<RenderDecal> GatherDecals(const Scene& scene, AssetManager* assets, 
 // Shared shader-equivalent projection coverage; uv is local X / reversed local Z.
 float DecalCoverage(const RenderDecal& decal, const Vec3& position, const Vec3& normal, float& u, float& v);
 // Blend decals into base color in order. Atlas tiles include a duplicated one-pixel clamp border.
-Color ApplyDecals(const std::vector<RenderDecal>& decals, const Texture* atlas, const Vec3& position, const Vec3& normal, Color base);
+Color ApplyDecals(const std::vector<RenderDecal>& decals, const Texture* atlas, const Vec3& position, const Vec3& normal, Color base,
+                  bool linear = false);  // linear: the atlas texels are sRGB (decoded)
 
 // Rebuild only when the selected textures/versions change. At most sixteen owners and one 1024-square atlas.
 class DecalAtlas {

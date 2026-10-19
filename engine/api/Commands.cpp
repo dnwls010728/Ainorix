@@ -1662,6 +1662,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      out["stats"]["triangles"] = stats.triangles;
                      out["stats"]["ms"] = stats.milliseconds;
                      out["stats"]["drawCalls"] = stats.drawCalls;
+                     if (std::string(stats.postGraph) != "none") out["stats"]["postGraph"] = stats.postGraph;
                      std::vector<uint8_t> png = EncodePng(img);
                      if (a.has("path")) {
                          std::string path = e.ResolvePath(a["path"].asString());
@@ -2540,6 +2541,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     // ----- Portable surface graphs (*.shader.json)
     auto shaderInfo = [](const ShaderGraph& graph) {
         Json result = Json::MakeObject();
+        result["stage"] = graph.stage == ShaderStage::Post ? "post" : "surface";
         result["nodes"] = static_cast<int>(graph.instructions.size());
         result["color"] = graph.color;
         result["emissive"] = graph.emissive;
@@ -2550,9 +2552,9 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         for (const std::string& name : graph.uniformNames) result["uniforms"].push(name);
         return result;
     };
-    Register(r, "shader.create", "Create a validated portable surface shader graph (*.shader.json).",
+    Register(r, "shader.create", "Create a validated portable shader graph (*.shader.json): a material surface, or with \"stage\": \"post\" a PostProcess.shader; injection: afterToneMapping (default display image) or beforeToneMapping (HDR scene before bloom).",
              Params().Req("path", "string", "Project-relative .shader.json file.")
-                 .Req("graph", "object", "Ordered nodes, color output, optional emissive/normal/offset outputs and named uniform defaults.")
+                 .Req("graph", "object", "Ordered nodes, color output, optional emissive/normal/offset/light outputs (surface only; light is added per light from lightVector/lightColor/lightAttenuation), named uniform defaults, optional stage.")
                  .Opt("overwrite", "boolean", "Replace an existing graph."), false,
              [shaderInfo](Engine& e, const Json& a) {
                  const std::string path = a["path"].asString(), full = e.ResolvePath(path);
@@ -2605,7 +2607,20 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         std::string err;
         TextureLoader load = [&e](const std::string& p, std::string* er) { return e.Assets().GetTexture(p, er); };
         if (!MaterialFromJson(j, load, check, &err,
-            [&e](const std::string& p, std::string* er) { return e.Assets().GetShader(p, er); })) {
+            [&e](const std::string& p, std::string* er) { return e.Assets().GetShader(p, er); },
+            [&e, &path](const std::string& p, std::string* er) -> std::shared_ptr<const Material> {
+                // A pass that leads back to this file (directly or through its own chain) would loop.
+                std::string chain = path + " -> " + p;
+                auto pass = p == path ? nullptr : e.Assets().GetMaterial(p, er);
+                for (const Material* m = pass.get(); m || p == path; m = m ? m->nextPass.get() : nullptr) {
+                    if (p == path || m->nextPassPath == path) {
+                        if (er) *er = "nextPass cycle: " + chain + (p == path ? "" : " -> " + path);
+                        return nullptr;
+                    }
+                    if (!m->nextPassPath.empty()) chain += " -> " + m->nextPassPath;
+                }
+                return pass;
+            })) {
             Json docs = MaterialFieldDocs();
             std::string names;
             for (const auto& kv : docs.members()) names += (names.empty() ? "" : ", ") + kv.first;
@@ -2622,7 +2637,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     };
     Register(r, "material.create",
              "Create a material file (*.mat.json): PBR baseColor/opacity/metallic/roughness, base/normal/metallicRoughness/occlusion/emissive textures, "
-             "alphaMode (opaque, mask, blend), doubleSided, unlit, tiling. Assign it with MeshRenderer.material.",
+             "alphaMode (opaque, mask, blend), doubleSided/cull, castShadows, smoothNormals, nextPass (another material drawn afterwards), unlit, tiling, outlineWidth/outlineColor/outlineUnits (toon outline). Assign it with MeshRenderer.material.",
              Params()
                  .Req("path", "string", "e.g. \"materials/glass.mat.json\".")
                  .Opt("values", "object", "Fields to set, e.g. {\"baseColor\": [1, 0.8, 0.2], \"metallic\": 1, \"roughness\": 0.3}. Others keep defaults.")
